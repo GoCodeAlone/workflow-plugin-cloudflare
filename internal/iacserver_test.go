@@ -9,7 +9,6 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-cloudflare/internal/drivers"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
-	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -26,8 +25,8 @@ func setupTestServer(t *testing.T) *grpc.ClientConn {
 	t.Cleanup(func() { _ = listener.Close() })
 	server := grpc.NewServer()
 	srv := NewIaCServer()
-	if err := sdk.RegisterAllIaCProviderServices(server, srv); err != nil {
-		t.Fatalf("RegisterAllIaCProviderServices: %v", err)
+	if err := RegisterIaCProviderServices(server, srv); err != nil {
+		t.Fatalf("RegisterIaCProviderServices: %v", err)
 	}
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
