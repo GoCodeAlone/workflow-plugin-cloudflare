@@ -1,0 +1,230 @@
+package drivers
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"testing"
+
+	"github.com/GoCodeAlone/workflow/interfaces"
+)
+
+type fakeCFClient struct {
+	zone           *Zone
+	records        []Record
+	dnssec         *DNSSEC
+	createdZones   []string
+	createdRecords []Record
+	updatedRecords []Record
+	deletedRecords []string
+}
+
+func (f *fakeCFClient) GetZone(_ context.Context, domain, zoneID string) (*Zone, error) {
+	if f.zone != nil {
+		return f.zone, nil
+	}
+	if zoneID != "" {
+		return &Zone{ID: zoneID, Name: domain, Status: "active"}, nil
+	}
+	return nil, errors.New("zone not found")
+}
+
+func (f *fakeCFClient) CreateZone(_ context.Context, _ string, domain string) (*Zone, error) {
+	f.createdZones = append(f.createdZones, domain)
+	f.zone = &Zone{ID: "zone-created", Name: domain, Status: "pending", NameServers: []string{"a.ns.cloudflare.com", "b.ns.cloudflare.com"}}
+	return f.zone, nil
+}
+
+func (f *fakeCFClient) DeleteZone(_ context.Context, zoneID string) error { return nil }
+
+func (f *fakeCFClient) ListRecords(_ context.Context, _ string) ([]Record, error) {
+	return slices.Clone(f.records), nil
+}
+
+func (f *fakeCFClient) CreateRecord(_ context.Context, _ string, record Record) (*Record, error) {
+	record.ID = "created"
+	f.createdRecords = append(f.createdRecords, record)
+	f.records = append(f.records, record)
+	return &record, nil
+}
+
+func (f *fakeCFClient) UpdateRecord(_ context.Context, _ string, recordID string, record Record) (*Record, error) {
+	record.ID = recordID
+	f.updatedRecords = append(f.updatedRecords, record)
+	for i := range f.records {
+		if f.records[i].ID == recordID {
+			f.records[i] = record
+		}
+	}
+	return &record, nil
+}
+
+func (f *fakeCFClient) DeleteRecord(_ context.Context, _ string, recordID string) error {
+	f.deletedRecords = append(f.deletedRecords, recordID)
+	return nil
+}
+
+func (f *fakeCFClient) GetDNSSEC(_ context.Context, _ string) (*DNSSEC, error) {
+	return f.dnssec, nil
+}
+
+func TestDNSDriver_CreateCreatesMissingZoneAndRecord(t *testing.T) {
+	proxied := true
+	fake := &fakeCFClient{dnssec: &DNSSEC{Status: "active", DS: "12345 13 2 abc"}}
+	driver := NewDNSDriverWithClient(fake)
+	out, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":     "example.com",
+			"account_id": "acct",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "203.0.113.10", "ttl": 300, "proxied": true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(fake.createdZones) != 1 || fake.createdZones[0] != "example.com" {
+		t.Fatalf("createdZones = %#v, want example.com", fake.createdZones)
+	}
+	if len(fake.createdRecords) != 1 {
+		t.Fatalf("createdRecords len = %d, want 1", len(fake.createdRecords))
+	}
+	if fake.createdRecords[0].Proxied == nil || *fake.createdRecords[0].Proxied != proxied {
+		t.Fatalf("proxied = %#v, want true", fake.createdRecords[0].Proxied)
+	}
+	if out.ProviderID != "zone-created" {
+		t.Fatalf("ProviderID = %q, want zone-created", out.ProviderID)
+	}
+	if out.Outputs["dnssec"].(map[string]any)["status"] != "active" {
+		t.Fatalf("dnssec output = %#v", out.Outputs["dnssec"])
+	}
+}
+
+func TestDNSDriver_ReadIncludesZoneMetadataAndRecords(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{
+			ID:                  "zone",
+			Name:                "example.com",
+			Status:              "active",
+			NameServers:         []string{"ada.ns.cloudflare.com", "bob.ns.cloudflare.com"},
+			OriginalNameServers: []string{"ns1.hover.com"},
+			OriginalRegistrar:   "Hover",
+			OriginalDNSHost:     "DigitalOcean",
+		},
+		records: []Record{{ID: "rec", Type: "MX", Name: "example.com", Data: "aspmx.l.google.com", TTL: 300, Priority: 1}},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	out, err := driver.Read(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if out.Outputs["original_registrar"] != "Hover" {
+		t.Fatalf("original_registrar = %#v", out.Outputs["original_registrar"])
+	}
+	records := out.Outputs["records"].([]map[string]any)
+	if len(records) != 1 || records[0]["priority"] != 1 {
+		t.Fatalf("records = %#v, want MX priority", records)
+	}
+}
+
+func TestDNSDriver_DiffDetectsProxiedTTLAndPriority(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "MX", "name": "example.com", "data": "aspmx.l.google.com", "ttl": 300, "priority": 1, "proxied": false,
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "MX", "name": "@", "data": "aspmx.l.google.com", "ttl": 600, "priority": 5, "proxied": false},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate || len(diff.Changes) == 0 {
+		t.Fatalf("diff = %#v, want update", diff)
+	}
+}
+
+func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{ID: "keep", Type: "TXT", Name: "example.com", Data: "v=spf1 include:_spf.google.com ~all", TTL: 300},
+			{ID: "a", Type: "A", Name: "example.com", Data: "203.0.113.10", TTL: 300},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "203.0.113.10", "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.deletedRecords) != 0 {
+		t.Fatalf("deletedRecords = %#v, want none", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_UpdateDeletesUnlistedRecordsWhenManaged(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{ID: "delete-me", Type: "TXT", Name: "example.com", Data: "stale", TTL: 300},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "example.com",
+			"manage_unlisted": true,
+			"records":         []any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "delete-me" {
+		t.Fatalf("deletedRecords = %#v, want delete-me", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_MissingRecordsErrorsBeforeMutation(t *testing.T) {
+	fake := &fakeCFClient{zone: &Zone{ID: "zone", Name: "example.com"}}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name:   "example.com",
+		Type:   "infra.dns",
+		Config: map[string]any{"domain": "example.com"},
+	})
+	if err == nil {
+		t.Fatal("expected missing records error")
+	}
+	if len(fake.createdRecords) != 0 || len(fake.createdZones) != 0 {
+		t.Fatalf("mutated before validation: zones=%#v records=%#v", fake.createdZones, fake.createdRecords)
+	}
+}
