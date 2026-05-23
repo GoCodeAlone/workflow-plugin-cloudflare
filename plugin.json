@@ -1,0 +1,40 @@
+{
+  "name": "workflow-plugin-cloudflare",
+  "version": "0.1.0",
+  "description": "Cloudflare DNS provider for workflow IaC (infra.dns)",
+  "author": "GoCodeAlone",
+  "license": "MIT",
+  "type": "external",
+  "tier": "community",
+  "private": false,
+  "minEngineVersion": "0.60.8",
+  "keywords": [
+    "cloudflare",
+    "dns",
+    "iac",
+    "infra.dns"
+  ],
+  "homepage": "https://github.com/GoCodeAlone/workflow-plugin-cloudflare",
+  "repository": "https://github.com/GoCodeAlone/workflow-plugin-cloudflare",
+  "capabilities": {
+    "moduleTypes": [
+      "iac.provider.cloudflare"
+    ],
+    "stepTypes": [],
+    "triggerTypes": [],
+    "resourceTypes": [
+      "infra.dns"
+    ]
+  },
+  "iacProvider": {
+    "computePlanVersion": "v2"
+  },
+  "required_secrets": [
+    {
+      "name": "CLOUDFLARE_API_TOKEN",
+      "sensitive": true,
+      "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; zone creation also requires permission to create zones on the account.",
+      "prompt": "Cloudflare API token"
+    }
+  ]
+}
