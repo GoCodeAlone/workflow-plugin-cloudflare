@@ -90,7 +90,8 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 }
 
 func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
-	zone, err := d.client.GetZone(ctx, ref.Name, ref.ProviderID)
+	domain, zoneID := domainAndZoneIDFromRef(ref)
+	zone, err := d.client.GetZone(ctx, domain, zoneID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns read %q: %w", ref.Name, err)
 	}
@@ -458,13 +459,25 @@ func diffRecords(current, desired []Record, manageUnlisted bool) []interfaces.Fi
 }
 
 func recordMatches(current, desired Record) bool {
-	return strings.EqualFold(current.Type, desired.Type) &&
-		canonicalName(current.Name) == canonicalName(desired.Name) &&
-		canonicalData(current.Type, current.Data) == canonicalData(desired.Type, desired.Data) &&
-		current.TTL == desired.TTL &&
-		current.Priority == desired.Priority &&
-		boolPtrValue(current.Proxied) == boolPtrValue(desired.Proxied) &&
-		current.Comment == desired.Comment
+	if !strings.EqualFold(current.Type, desired.Type) ||
+		canonicalName(current.Name) != canonicalName(desired.Name) ||
+		canonicalData(current.Type, current.Data) != canonicalData(desired.Type, desired.Data) ||
+		current.TTL != desired.TTL ||
+		current.Priority != desired.Priority ||
+		current.Comment != desired.Comment {
+		return false
+	}
+	if desired.Proxied != nil && boolPtrValue(current.Proxied) != *desired.Proxied {
+		return false
+	}
+	return true
+}
+
+func domainAndZoneIDFromRef(ref interfaces.ResourceRef) (string, string) {
+	if ref.ProviderID != "" && interfaces.ValidateProviderID(ref.ProviderID, interfaces.IDFormatDomainName) {
+		return ref.ProviderID, ""
+	}
+	return ref.Name, ref.ProviderID
 }
 
 func recordKey(record Record) string {

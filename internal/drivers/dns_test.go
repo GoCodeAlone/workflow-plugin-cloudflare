@@ -13,6 +13,8 @@ type fakeCFClient struct {
 	zone           *Zone
 	records        []Record
 	dnssec         *DNSSEC
+	lastGetDomain  string
+	lastGetZoneID  string
 	createdZones   []string
 	createdRecords []Record
 	updatedRecords []Record
@@ -20,6 +22,8 @@ type fakeCFClient struct {
 }
 
 func (f *fakeCFClient) GetZone(_ context.Context, domain, zoneID string) (*Zone, error) {
+	f.lastGetDomain = domain
+	f.lastGetZoneID = zoneID
 	if f.zone != nil {
 		return f.zone, nil
 	}
@@ -130,6 +134,18 @@ func TestDNSDriver_ReadIncludesZoneMetadataAndRecords(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_ReadTreatsDomainProviderIDAsDomainNotZoneID(t *testing.T) {
+	fake := &fakeCFClient{zone: &Zone{ID: "zone", Name: "example.com"}}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Read(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "example.com"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if fake.lastGetDomain != "example.com" || fake.lastGetZoneID != "" {
+		t.Fatalf("GetZone(domain, zoneID) = (%q, %q), want (example.com, empty)", fake.lastGetDomain, fake.lastGetZoneID)
+	}
+}
+
 func TestDNSDriver_DiffDetectsProxiedTTLAndPriority(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{
@@ -158,6 +174,37 @@ func TestDNSDriver_DiffDetectsProxiedTTLAndPriority(t *testing.T) {
 	}
 	if !diff.NeedsUpdate || len(diff.Changes) == 0 {
 		t.Fatalf("diff = %#v, want update", diff)
+	}
+}
+
+func TestDNSDriver_DiffDoesNotManageProxiedWhenOmitted(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "A", "name": "example.com", "data": "203.0.113.10", "ttl": 300, "proxied": true,
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "203.0.113.10", "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want no update when proxied is omitted", diff)
 	}
 }
 
