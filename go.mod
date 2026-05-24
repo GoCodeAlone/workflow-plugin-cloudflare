@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/GoCodeAlone/go-plugin v1.7.0
-	github.com/GoCodeAlone/workflow v0.60.18
+	github.com/GoCodeAlone/workflow v0.62.0
 	github.com/cloudflare/cloudflare-go/v7 v7.3.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af

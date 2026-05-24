@@ -4,8 +4,8 @@ github.com/GoCodeAlone/go-plugin v1.7.0 h1:EwnhqPlXiNmp85S+MXnKKvm3YlfA6O4NzBb4+
 github.com/GoCodeAlone/go-plugin v1.7.0/go.mod h1:HbGQRZUIa+jbDfjsaZIMJYvrz+LnxL0mJpggfynSTMk=
 github.com/GoCodeAlone/modular v1.13.0 h1:UfsegfAmPWcPYQOqYZFsw/LNySBmMDcthiOQe5bscqE=
 github.com/GoCodeAlone/modular v1.13.0/go.mod h1:b06Pvgcc8HsGxvl30iO39zGH2jIWz467QEj2+OQL2Do=
-github.com/GoCodeAlone/workflow v0.60.18 h1:USxe1nPYlZ79G8+YFPjS1CrzBDD0vyiagr2AqReiBMU=
-github.com/GoCodeAlone/workflow v0.60.18/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
+github.com/GoCodeAlone/workflow v0.62.0 h1:emFkTomDpVmBcEfw7quRO4V/J4qDsWNx/CrBdlGqkfg=
+github.com/GoCodeAlone/workflow v0.62.0/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
 github.com/bufbuild/protocompile v0.10.0 h1:+jW/wnLMLxaCEG8AX9lD0bQ5v9h1RUiMKOBOT5ll9dM=
 github.com/bufbuild/protocompile v0.10.0/go.mod h1:G9qQIQo0xZ6Uyj6CMNz0saGmx2so+KONo8/KrELABiY=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
