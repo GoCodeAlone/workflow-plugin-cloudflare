@@ -128,6 +128,30 @@ func TestDNSDriver_ReadIncludesZoneMetadataAndRecords(t *testing.T) {
 	if out.Outputs["original_registrar"] != "Hover" {
 		t.Fatalf("original_registrar = %#v", out.Outputs["original_registrar"])
 	}
+	authority, ok := out.Outputs["authority"].(map[string]any)
+	if !ok {
+		t.Fatalf("authority = %T, want map[string]any", out.Outputs["authority"])
+	}
+	if got := authority["role"]; got != "target_authoritative_dns" {
+		t.Fatalf("authority.role = %v, want target_authoritative_dns", got)
+	}
+	if got := authority["dns_host"]; got != "Cloudflare" {
+		t.Fatalf("authority.dns_host = %v, want Cloudflare", got)
+	}
+	nameservers, ok := authority["name_servers"].([]string)
+	if !ok || len(nameservers) != 2 || nameservers[0] != "ada.ns.cloudflare.com" {
+		t.Fatalf("authority.name_servers = %#v, want Cloudflare nameservers", authority["name_servers"])
+	}
+	original, ok := authority["original_name_servers"].([]string)
+	if !ok || len(original) != 1 || original[0] != "ns1.hover.com" {
+		t.Fatalf("authority.original_name_servers = %#v, want original nameservers", authority["original_name_servers"])
+	}
+	if got := authority["original_registrar"]; got != "Hover" {
+		t.Fatalf("authority.original_registrar = %v, want Hover", got)
+	}
+	if got := authority["original_dnshost"]; got != "DigitalOcean" {
+		t.Fatalf("authority.original_dnshost = %v, want DigitalOcean", got)
+	}
 	records := out.Outputs["records"].([]map[string]any)
 	if len(records) != 1 || records[0]["priority"] != 1 {
 		t.Fatalf("records = %#v, want MX priority", records)
