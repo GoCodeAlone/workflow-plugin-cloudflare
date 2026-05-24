@@ -25,9 +25,7 @@ func setupTestServer(t *testing.T) *grpc.ClientConn {
 	t.Cleanup(func() { _ = listener.Close() })
 	server := grpc.NewServer()
 	srv := NewIaCServer()
-	if err := RegisterIaCProviderServices(server, srv); err != nil {
-		t.Fatalf("RegisterIaCProviderServices: %v", err)
-	}
+	pb.RegisterIaCProviderRequiredServer(server, srv)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(server.Stop)
 	conn, err := grpc.NewClient("passthrough:///bufnet",
