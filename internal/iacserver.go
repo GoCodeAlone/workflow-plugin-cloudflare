@@ -14,7 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var Version = "dev"
+var Version = "0.0.0"
 
 type cfIaCServer struct {
 	pb.UnimplementedIaCProviderRequiredServer
