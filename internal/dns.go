@@ -11,7 +11,8 @@ var ErrAuthMissing = errors.New("cloudflare: api_token not configured")
 
 // Config is the provider config block consumed from config_json.
 type Config struct {
-	APIToken string
+	APIToken  string
+	AccountID string
 }
 
 func (c Config) Validate() error {

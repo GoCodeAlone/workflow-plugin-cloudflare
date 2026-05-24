@@ -23,7 +23,8 @@
     "stepTypes": [],
     "triggerTypes": [],
     "resourceTypes": [
-      "infra.dns"
+      "infra.dns",
+      "infra.domain"
     ]
   },
   "iacProvider": {
@@ -33,7 +34,7 @@
     {
       "name": "CLOUDFLARE_API_TOKEN",
       "sensitive": true,
-      "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; zone creation also requires permission to create zones on the account.",
+      "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; registrar import/status also requires Registrar read access and auto-renew updates require Registrar edit access.",
       "prompt": "Cloudflare API token"
     }
   ]

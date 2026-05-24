@@ -20,8 +20,9 @@ type cfIaCServer struct {
 	pb.UnimplementedIaCProviderRequiredServer
 	pb.UnimplementedIaCProviderFinalizerServer
 
-	cfg    Config
-	driver *drivers.DNSDriver
+	cfg          Config
+	dnsDriver    *drivers.DNSDriver
+	domainDriver *drivers.DomainDriver
 }
 
 var (
@@ -43,11 +44,18 @@ func (s *cfIaCServer) Version(_ context.Context, _ *pb.VersionRequest) (*pb.Vers
 
 func (s *cfIaCServer) Capabilities(_ context.Context, _ *pb.CapabilitiesRequest) (*pb.CapabilitiesResponse, error) {
 	return &pb.CapabilitiesResponse{
-		Capabilities: []*pb.IaCCapabilityDeclaration{{
-			ResourceType: "infra.dns",
-			Tier:         1,
-			Operations:   []string{"create", "read", "update", "delete"},
-		}},
+		Capabilities: []*pb.IaCCapabilityDeclaration{
+			{
+				ResourceType: "infra.dns",
+				Tier:         1,
+				Operations:   []string{"create", "read", "update", "delete"},
+			},
+			{
+				ResourceType: "infra.domain",
+				Tier:         1,
+				Operations:   []string{"read", "update"},
+			},
+		},
 		ComputePlanVersion: "v2",
 	}, nil
 }
@@ -57,7 +65,7 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: parse config_json: %w", err)
 	}
-	cfg := Config{APIToken: strVal(m, "api_token")}
+	cfg := Config{APIToken: strVal(m, "api_token"), AccountID: strVal(m, "account_id")}
 	if cfg.APIToken == "" {
 		cfg.APIToken = strVal(m, "token")
 	}
@@ -65,12 +73,13 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 		return nil, fmt.Errorf("cloudflare iacserver: invalid config: %w", err)
 	}
 	s.cfg = cfg
-	s.driver = drivers.NewDNSDriver(cfg.APIToken)
+	s.dnsDriver = drivers.NewDNSDriver(cfg.APIToken)
+	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
 	return &pb.InitializeResponse{}, nil
 }
 
 func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanResponse, error) {
-	if s.driver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Plan called before Initialize")
 	}
 	desired, err := specsFromPB(req.GetDesired())
@@ -81,7 +90,7 @@ func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanRe
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: decode Plan current: %w", err)
 	}
-	p := &cfProvider{driver: s.driver}
+	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver}
 	plan, err := platform.ComputePlan(ctx, p, desired, current)
 	if err != nil {
 		return nil, err
@@ -94,14 +103,18 @@ func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanRe
 }
 
 func (s *cfIaCServer) Destroy(ctx context.Context, req *pb.DestroyRequest) (*pb.DestroyResponse, error) {
-	if s.driver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Destroy called before Initialize")
 	}
 	refs := refsFromPB(req.GetRefs())
 	var destroyed []string
 	var errs []*pb.ActionError
 	for _, ref := range refs {
-		if err := s.driver.Delete(ctx, ref); err != nil {
+		driver, err := s.resourceDriver(ref.Type)
+		if err == nil {
+			err = driver.Delete(ctx, ref)
+		}
+		if err != nil {
 			errs = append(errs, &pb.ActionError{Resource: ref.Name, Action: "delete", Error: err.Error()})
 		} else {
 			destroyed = append(destroyed, ref.Name)
@@ -111,13 +124,18 @@ func (s *cfIaCServer) Destroy(ctx context.Context, req *pb.DestroyRequest) (*pb.
 }
 
 func (s *cfIaCServer) Status(ctx context.Context, req *pb.StatusRequest) (*pb.StatusResponse, error) {
-	if s.driver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Status called before Initialize")
 	}
 	refs := refsFromPB(req.GetRefs())
 	statuses := make([]*pb.ResourceStatus, 0, len(refs))
 	for _, ref := range refs {
-		out, err := s.driver.Read(ctx, ref)
+		driver, err := s.resourceDriver(ref.Type)
+		if err != nil {
+			statuses = append(statuses, &pb.ResourceStatus{Name: ref.Name, Type: ref.Type, Status: "error"})
+			continue
+		}
+		out, err := driver.Read(ctx, ref)
 		if err != nil {
 			statuses = append(statuses, &pb.ResourceStatus{Name: ref.Name, Type: ref.Type, Status: "error"})
 			continue
@@ -139,7 +157,7 @@ func (s *cfIaCServer) Status(ctx context.Context, req *pb.StatusRequest) (*pb.St
 }
 
 func (s *cfIaCServer) Import(ctx context.Context, req *pb.ImportRequest) (*pb.ImportResponse, error) {
-	if s.driver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Import called before Initialize")
 	}
 	resourceType := req.GetResourceType()
@@ -151,7 +169,11 @@ func (s *cfIaCServer) Import(ctx context.Context, req *pb.ImportRequest) (*pb.Im
 		Type:       resourceType,
 		ProviderID: req.GetProviderId(),
 	}
-	out, err := s.driver.Read(ctx, ref)
+	driver, err := s.resourceDriver(resourceType)
+	if err != nil {
+		return nil, err
+	}
+	out, err := driver.Read(ctx, ref)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: import %q: %w", req.GetProviderId(), err)
 	}
@@ -172,6 +194,17 @@ func (s *cfIaCServer) Import(ctx context.Context, req *pb.ImportRequest) (*pb.Im
 	}}, nil
 }
 
+func (s *cfIaCServer) resourceDriver(resourceType string) (interfaces.ResourceDriver, error) {
+	switch resourceType {
+	case "", "infra.dns":
+		return s.dnsDriver, nil
+	case "infra.domain":
+		return s.domainDriver, nil
+	default:
+		return nil, fmt.Errorf("cloudflare: unsupported resource type %q", resourceType)
+	}
+}
+
 func (s *cfIaCServer) ResolveSizing(_ context.Context, _ *pb.ResolveSizingRequest) (*pb.ResolveSizingResponse, error) {
 	return &pb.ResolveSizingResponse{Sizing: nil}, nil
 }
@@ -185,7 +218,8 @@ func (s *cfIaCServer) FinalizeApply(_ context.Context, _ *pb.FinalizeApplyReques
 }
 
 type cfProvider struct {
-	driver *drivers.DNSDriver
+	dnsDriver    *drivers.DNSDriver
+	domainDriver *drivers.DomainDriver
 }
 
 func (p *cfProvider) Name() string    { return "cloudflare" }
@@ -194,13 +228,20 @@ func (p *cfProvider) Initialize(_ context.Context, _ map[string]any) error {
 	return nil
 }
 func (p *cfProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
-	return []interfaces.IaCCapabilityDeclaration{{ResourceType: "infra.dns", Tier: 1, Operations: []string{"create", "read", "update", "delete"}}}
+	return []interfaces.IaCCapabilityDeclaration{
+		{ResourceType: "infra.dns", Tier: 1, Operations: []string{"create", "read", "update", "delete"}},
+		{ResourceType: "infra.domain", Tier: 1, Operations: []string{"read", "update"}},
+	}
 }
 func (p *cfProvider) ResourceDriver(resourceType string) (interfaces.ResourceDriver, error) {
-	if resourceType != "infra.dns" {
+	switch resourceType {
+	case "", "infra.dns":
+		return p.dnsDriver, nil
+	case "infra.domain":
+		return p.domainDriver, nil
+	default:
 		return nil, fmt.Errorf("cloudflare: unsupported resource type %q", resourceType)
 	}
-	return p.driver, nil
 }
 func (p *cfProvider) Plan(ctx context.Context, desired []interfaces.ResourceSpec, current []interfaces.ResourceState) (*interfaces.IaCPlan, error) {
 	plan, err := platform.ComputePlan(ctx, p, desired, current)

@@ -62,7 +62,7 @@ func TestCfIaCServer_NameVersionCapabilities(t *testing.T) {
 	if caps.GetComputePlanVersion() != "v2" {
 		t.Fatalf("ComputePlanVersion = %q, want v2", caps.GetComputePlanVersion())
 	}
-	if len(caps.GetCapabilities()) != 1 || caps.GetCapabilities()[0].GetResourceType() != "infra.dns" {
+	if len(caps.GetCapabilities()) != 2 || caps.GetCapabilities()[0].GetResourceType() != "infra.dns" || caps.GetCapabilities()[1].GetResourceType() != "infra.domain" {
 		t.Fatalf("capabilities = %#v", caps.GetCapabilities())
 	}
 }
@@ -90,7 +90,10 @@ func TestCfIaCServer_PlanBeforeInitialize(t *testing.T) {
 }
 
 func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
-	srv := &cfIaCServer{driver: drivers.NewDNSDriverWithClient(&serverFakeCFClient{})}
+	srv := &cfIaCServer{
+		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+	}
 	resp, err := srv.Import(context.Background(), &pb.ImportRequest{ProviderId: "zone", ResourceType: "infra.dns"})
 	if err != nil {
 		t.Fatalf("Import: %v", err)
@@ -103,6 +106,27 @@ func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
 		t.Fatalf("unmarshal outputs: %v", err)
 	}
 	if outputs["domain"] != "example.com" {
+		t.Fatalf("outputs = %#v", outputs)
+	}
+}
+
+func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
+	srv := &cfIaCServer{
+		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+	}
+	resp, err := srv.Import(context.Background(), &pb.ImportRequest{ProviderId: "example.com", ResourceType: "infra.domain"})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if resp.GetState().GetProviderId() != "example.com" || resp.GetState().GetType() != "infra.domain" {
+		t.Fatalf("state = %#v", resp.GetState())
+	}
+	var outputs map[string]any
+	if err := json.Unmarshal(resp.GetState().GetOutputsJson(), &outputs); err != nil {
+		t.Fatalf("unmarshal outputs: %v", err)
+	}
+	if outputs["account_id"] != "acct" || outputs["auto_renew"] != true {
 		t.Fatalf("outputs = %#v", outputs)
 	}
 }
@@ -127,5 +151,20 @@ func (serverFakeCFClient) UpdateRecord(_ context.Context, _, _ string, _ drivers
 }
 func (serverFakeCFClient) DeleteRecord(_ context.Context, _, _ string) error { return nil }
 func (serverFakeCFClient) GetDNSSEC(_ context.Context, _ string) (*drivers.DNSSEC, error) {
+	return nil, nil
+}
+
+type serverFakeRegistrarClient struct{}
+
+func (serverFakeRegistrarClient) GetRegistration(_ context.Context, _, domain string) (*drivers.Registration, error) {
+	return &drivers.Registration{DomainName: domain, AutoRenew: true, Locked: true, PrivacyMode: "redaction", Status: "active"}, nil
+}
+func (serverFakeRegistrarClient) UpdateRegistrationAutoRenew(_ context.Context, _, _ string, _ bool) (*drivers.RegistrarWorkflowStatus, error) {
+	return &drivers.RegistrarWorkflowStatus{State: "pending"}, nil
+}
+func (serverFakeRegistrarClient) GetRegistrationStatus(_ context.Context, _, _ string) (*drivers.RegistrarWorkflowStatus, error) {
+	return nil, nil
+}
+func (serverFakeRegistrarClient) GetUpdateStatus(_ context.Context, _, _ string) (*drivers.RegistrarWorkflowStatus, error) {
 	return nil, nil
 }
