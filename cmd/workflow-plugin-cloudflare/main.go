@@ -4,8 +4,11 @@ package main
 
 import (
 	"github.com/GoCodeAlone/workflow-plugin-cloudflare/internal"
+	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
 func main() {
-	internal.ServeIaCPlugin(internal.NewIaCServer())
+	sdk.ServeIaCPlugin(internal.NewIaCServer(), sdk.IaCServeOptions{
+		BuildVersion: sdk.ResolveBuildVersion(internal.Version),
+	})
 }
