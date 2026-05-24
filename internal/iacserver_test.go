@@ -106,6 +106,24 @@ func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
 	if outputs["domain"] != "example.com" {
 		t.Fatalf("outputs = %#v", outputs)
 	}
+	if resp.GetState().GetAppliedConfigSource() != "adoption" {
+		t.Fatalf("applied_config_source = %q, want adoption", resp.GetState().GetAppliedConfigSource())
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(resp.GetState().GetAppliedConfigJson(), &applied); err != nil {
+		t.Fatalf("unmarshal applied config: %v", err)
+	}
+	if applied["provider"] != "cloudflare" || applied["domain"] != "example.com" || applied["zone_id"] != "zone" {
+		t.Fatalf("applied config = %#v, want provider/domain/zone_id", applied)
+	}
+	records, ok := applied["records"].([]any)
+	if !ok || len(records) != 1 {
+		t.Fatalf("applied records = %#v, want one record", applied["records"])
+	}
+	record, ok := records[0].(map[string]any)
+	if !ok || record["id"] != nil || record["type"] != "TXT" || record["data"] != "imported" {
+		t.Fatalf("applied record = %#v, want IaC-safe TXT record without provider id", records[0])
+	}
 }
 
 func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
@@ -126,6 +144,36 @@ func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
 	}
 	if outputs["account_id"] != "acct" || outputs["auto_renew"] != true {
 		t.Fatalf("outputs = %#v", outputs)
+	}
+	if resp.GetState().GetAppliedConfigSource() != "adoption" {
+		t.Fatalf("applied_config_source = %q, want adoption", resp.GetState().GetAppliedConfigSource())
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(resp.GetState().GetAppliedConfigJson(), &applied); err != nil {
+		t.Fatalf("unmarshal applied config: %v", err)
+	}
+	if applied["provider"] != "cloudflare" || applied["domain"] != "example.com" || applied["account_id"] != "acct" {
+		t.Fatalf("applied config = %#v, want provider/domain/account_id", applied)
+	}
+	if _, ok := applied["auto_renew"]; ok {
+		t.Fatalf("applied config = %#v, auto_renew must stay output-only unless user opts in", applied)
+	}
+}
+
+func TestCfProvider_ImportBuildsAdoptionConfig(t *testing.T) {
+	provider := &cfProvider{
+		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+	}
+	state, err := provider.Import(context.Background(), "zone", "infra.dns")
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if state.AppliedConfigSource != "adoption" {
+		t.Fatalf("AppliedConfigSource = %q, want adoption", state.AppliedConfigSource)
+	}
+	if state.AppliedConfig["domain"] != "example.com" || state.AppliedConfig["zone_id"] != "zone" {
+		t.Fatalf("AppliedConfig = %#v, want imported dns config", state.AppliedConfig)
 	}
 }
 

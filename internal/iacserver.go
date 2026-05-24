@@ -181,16 +181,23 @@ func (s *cfIaCServer) Import(ctx context.Context, req *pb.ImportRequest) (*pb.Im
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: marshal import outputs: %w", err)
 	}
+	appliedConfig := importedAppliedConfig(out.Type, out.Outputs)
+	appliedConfigJSON, err := json.Marshal(appliedConfig)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare iacserver: marshal import applied config: %w", err)
+	}
 	now := time.Now()
 	return &pb.ImportResponse{State: &pb.ResourceState{
-		Id:          out.ProviderID,
-		Name:        out.Name,
-		Type:        out.Type,
-		Provider:    "cloudflare",
-		ProviderId:  out.ProviderID,
-		OutputsJson: outputsJSON,
-		CreatedAt:   timestamppb.New(now),
-		UpdatedAt:   timestamppb.New(now),
+		Id:                  out.ProviderID,
+		Name:                out.Name,
+		Type:                out.Type,
+		Provider:            "cloudflare",
+		ProviderId:          out.ProviderID,
+		AppliedConfigJson:   appliedConfigJSON,
+		AppliedConfigSource: "adoption",
+		OutputsJson:         outputsJSON,
+		CreatedAt:           timestamppb.New(now),
+		UpdatedAt:           timestamppb.New(now),
 	}}, nil
 }
 
@@ -270,14 +277,16 @@ func (p *cfProvider) Import(ctx context.Context, cloudID string, resourceType st
 	}
 	now := time.Now()
 	return &interfaces.ResourceState{
-		ID:         out.ProviderID,
-		Name:       out.Name,
-		Type:       out.Type,
-		Provider:   "cloudflare",
-		ProviderID: out.ProviderID,
-		Outputs:    out.Outputs,
-		CreatedAt:  now,
-		UpdatedAt:  now,
+		ID:                  out.ProviderID,
+		Name:                out.Name,
+		Type:                out.Type,
+		Provider:            "cloudflare",
+		ProviderID:          out.ProviderID,
+		AppliedConfig:       importedAppliedConfig(out.Type, out.Outputs),
+		AppliedConfigSource: "adoption",
+		Outputs:             out.Outputs,
+		CreatedAt:           now,
+		UpdatedAt:           now,
 	}, nil
 }
 func (p *cfProvider) ResolveSizing(_ string, _ interfaces.Size, _ *interfaces.ResourceHints) (*interfaces.ProviderSizing, error) {
@@ -387,18 +396,19 @@ func stateFromPB(s *pb.ResourceState) (*interfaces.ResourceState, error) {
 		return nil, err
 	}
 	return &interfaces.ResourceState{
-		ID:            s.GetId(),
-		Name:          s.GetName(),
-		Type:          s.GetType(),
-		Provider:      s.GetProvider(),
-		ProviderRef:   s.GetProviderRef(),
-		ProviderID:    s.GetProviderId(),
-		ConfigHash:    s.GetConfigHash(),
-		AppliedConfig: applied,
-		Outputs:       outputs,
-		Dependencies:  append([]string(nil), s.GetDependencies()...),
-		CreatedAt:     timeFromPB(s.GetCreatedAt()),
-		UpdatedAt:     timeFromPB(s.GetUpdatedAt()),
+		ID:                  s.GetId(),
+		Name:                s.GetName(),
+		Type:                s.GetType(),
+		Provider:            s.GetProvider(),
+		ProviderRef:         s.GetProviderRef(),
+		ProviderID:          s.GetProviderId(),
+		ConfigHash:          s.GetConfigHash(),
+		AppliedConfig:       applied,
+		AppliedConfigSource: s.GetAppliedConfigSource(),
+		Outputs:             outputs,
+		Dependencies:        append([]string(nil), s.GetDependencies()...),
+		CreatedAt:           timeFromPB(s.GetCreatedAt()),
+		UpdatedAt:           timeFromPB(s.GetUpdatedAt()),
 	}, nil
 }
 
@@ -478,18 +488,19 @@ func stateToPB(st *interfaces.ResourceState) (*pb.ResourceState, error) {
 		return nil, err
 	}
 	return &pb.ResourceState{
-		Id:                st.ID,
-		Name:              st.Name,
-		Type:              st.Type,
-		Provider:          st.Provider,
-		ProviderRef:       st.ProviderRef,
-		ProviderId:        st.ProviderID,
-		ConfigHash:        st.ConfigHash,
-		AppliedConfigJson: appliedJSON,
-		OutputsJson:       outputsJSON,
-		Dependencies:      append([]string(nil), st.Dependencies...),
-		CreatedAt:         timeToPB(st.CreatedAt),
-		UpdatedAt:         timeToPB(st.UpdatedAt),
+		Id:                  st.ID,
+		Name:                st.Name,
+		Type:                st.Type,
+		Provider:            st.Provider,
+		ProviderRef:         st.ProviderRef,
+		ProviderId:          st.ProviderID,
+		ConfigHash:          st.ConfigHash,
+		AppliedConfigJson:   appliedJSON,
+		AppliedConfigSource: st.AppliedConfigSource,
+		OutputsJson:         outputsJSON,
+		Dependencies:        append([]string(nil), st.Dependencies...),
+		CreatedAt:           timeToPB(st.CreatedAt),
+		UpdatedAt:           timeToPB(st.UpdatedAt),
 	}, nil
 }
 
@@ -516,6 +527,61 @@ func planToPB(plan *interfaces.IaCPlan) (*pb.IaCPlan, error) {
 		SchemaVersion: int32(plan.SchemaVersion), //nolint:gosec // range-checked above
 		InputSnapshot: copyStringMap(plan.InputSnapshot),
 	}, nil
+}
+
+func importedAppliedConfig(resourceType string, outputs map[string]any) map[string]any {
+	cfg := map[string]any{"provider": "cloudflare"}
+	switch resourceType {
+	case "infra.domain":
+		copyIfPresent(cfg, outputs, "domain")
+		copyIfPresent(cfg, outputs, "account_id")
+	default:
+		copyIfPresent(cfg, outputs, "domain")
+		copyIfPresent(cfg, outputs, "zone_id")
+		cfg["records"] = importedDNSRecords(outputs["records"])
+	}
+	return cfg
+}
+
+func importedDNSRecords(raw any) []map[string]any {
+	rawRecords := recordsAsMaps(raw)
+	records := make([]map[string]any, 0, len(rawRecords))
+	for _, rawRecord := range rawRecords {
+		record := make(map[string]any)
+		for _, key := range []string{"type", "name", "data", "ttl", "priority", "proxied", "comment"} {
+			if value, ok := rawRecord[key]; ok {
+				record[key] = value
+			}
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func recordsAsMaps(raw any) []map[string]any {
+	switch typed := raw.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if record, ok := item.(map[string]any); ok {
+				out = append(out, record)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func copyIfPresent(dst map[string]any, src map[string]any, key string) {
+	if src == nil {
+		return
+	}
+	if value, ok := src[key]; ok {
+		dst[key] = value
+	}
 }
 
 func copyStringMap(in map[string]string) map[string]string {
