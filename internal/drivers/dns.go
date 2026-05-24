@@ -514,6 +514,14 @@ func dnsOutput(name string, zone *Zone, records []Record, dnssec *DNSSEC) *inter
 		"original_dnshost":      zone.OriginalDNSHost,
 		"record_count":          len(records),
 		"records":               recordOutputs(records),
+		"authority": map[string]any{
+			"role":                  "target_authoritative_dns",
+			"dns_host":              "Cloudflare",
+			"name_servers":          append([]string(nil), zone.NameServers...),
+			"original_name_servers": append([]string(nil), zone.OriginalNameServers...),
+			"original_registrar":    zone.OriginalRegistrar,
+			"original_dnshost":      zone.OriginalDNSHost,
+		},
 	}
 	if dnssec != nil {
 		outputs["dnssec"] = map[string]any{
