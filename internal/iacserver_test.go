@@ -299,3 +299,46 @@ func TestCfProvider_EnumerateAll_DNS_unsupportedType(t *testing.T) {
 		t.Fatalf("want unsupported-type error; got nil")
 	}
 }
+
+// TestCfIaCServer_EnumerateAll_DNS exercises the typed gRPC surface
+// (cfIaCServer.EnumerateAll). The SDK auto-registers this service at plugin
+// startup because cfIaCServer satisfies pb.IaCProviderEnumeratorServer; this
+// test confirms the proto<->Go marshalling on the EnumerateAll path is
+// correct (outputs_json round-trips zone/account_id/zone_id).
+func TestCfIaCServer_EnumerateAll_DNS(t *testing.T) {
+	srv := &cfIaCServer{
+		zones: &fakeZoneLister{items: []zones.Zone{
+			{ID: "zid-1", Name: "alpha.test", Account: zones.ZoneAccount{ID: "acct-1"}},
+			{ID: "zid-2", Name: "beta.test", Account: zones.ZoneAccount{ID: "acct-1"}},
+		}},
+	}
+	resp, err := srv.EnumerateAll(context.Background(), &pb.EnumerateAllRequest{ResourceType: "infra.dns"})
+	if err != nil {
+		t.Fatalf("EnumerateAll: %v", err)
+	}
+	if len(resp.GetOutputs()) != 2 {
+		t.Fatalf("want 2 outputs; got %d", len(resp.GetOutputs()))
+	}
+	first := resp.GetOutputs()[0]
+	if first.GetProviderId() != "zid-1" {
+		t.Errorf("providerID = %q; want zid-1", first.GetProviderId())
+	}
+	if first.GetType() != "infra.dns" {
+		t.Errorf("type = %q; want infra.dns", first.GetType())
+	}
+	var outputs map[string]any
+	if err := json.Unmarshal(first.GetOutputsJson(), &outputs); err != nil {
+		t.Fatalf("unmarshal outputs: %v", err)
+	}
+	if outputs["zone"] != "alpha.test" || outputs["account_id"] != "acct-1" || outputs["zone_id"] != "zid-1" {
+		t.Errorf("outputs = %#v", outputs)
+	}
+}
+
+func TestCfIaCServer_EnumerateAll_BeforeInitialize(t *testing.T) {
+	srv := &cfIaCServer{}
+	_, err := srv.EnumerateAll(context.Background(), &pb.EnumerateAllRequest{ResourceType: "infra.dns"})
+	if err == nil {
+		t.Fatalf("want before-Initialize error; got nil")
+	}
+}
