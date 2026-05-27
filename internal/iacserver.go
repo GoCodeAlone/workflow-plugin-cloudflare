@@ -11,6 +11,9 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/GoCodeAlone/workflow/platform"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
+	"github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/option"
+	"github.com/cloudflare/cloudflare-go/v7/zones"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -19,15 +22,25 @@ var Version = "0.0.0"
 type cfIaCServer struct {
 	pb.UnimplementedIaCProviderRequiredServer
 	pb.UnimplementedIaCProviderFinalizerServer
+	// UnimplementedIaCProviderEnumeratorServer provides the EnumerateByTag
+	// fallback (returns Unimplemented at the gRPC layer) and satisfies the
+	// codegen mustEmbed forward-compat requirement. EnumerateAll is overridden
+	// below so the SDK auto-registers IaCProviderEnumerator at plugin startup
+	// for the `infra.dns` enumeration path.
+	pb.UnimplementedIaCProviderEnumeratorServer
 
 	cfg          Config
 	dnsDriver    *drivers.DNSDriver
 	domainDriver *drivers.DomainDriver
+	// zones is the account-level zone lister used by EnumerateAll. Constructed
+	// in Initialize from the validated cloudflare-go SDK client.
+	zones zoneListerCF
 }
 
 var (
-	_ pb.IaCProviderRequiredServer  = (*cfIaCServer)(nil)
-	_ pb.IaCProviderFinalizerServer = (*cfIaCServer)(nil)
+	_ pb.IaCProviderRequiredServer   = (*cfIaCServer)(nil)
+	_ pb.IaCProviderFinalizerServer  = (*cfIaCServer)(nil)
+	_ pb.IaCProviderEnumeratorServer = (*cfIaCServer)(nil)
 )
 
 func NewIaCServer() *cfIaCServer {
@@ -75,7 +88,15 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 	s.cfg = cfg
 	s.dnsDriver = drivers.NewDNSDriver(cfg.APIToken)
 	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
+	s.zones = newRealZoneLister(cfg.APIToken)
 	return &pb.InitializeResponse{}, nil
+}
+
+// newRealZoneLister constructs the production zoneListerCF backed by the
+// cloudflare-go/v7 SDK. Kept separate from Initialize so tests can swap in
+// a slice-backed fake without touching environment-bound auth.
+func newRealZoneLister(apiToken string) zoneListerCF {
+	return &cfRealZoneLister{client: cloudflare.NewClient(option.WithAPIToken(apiToken))}
 }
 
 func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanResponse, error) {
@@ -90,7 +111,7 @@ func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanRe
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: decode Plan current: %w", err)
 	}
-	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver}
+	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, zones: s.zones}
 	plan, err := platform.ComputePlan(ctx, p, desired, current)
 	if err != nil {
 		return nil, err
@@ -224,9 +245,80 @@ func (s *cfIaCServer) FinalizeApply(_ context.Context, _ *pb.FinalizeApplyReques
 	return &pb.FinalizeApplyResponse{}, nil
 }
 
+// EnumerateAll satisfies pb.IaCProviderEnumeratorServer.EnumerateAll. Mirrors
+// the Go-level interfaces.EnumeratorAll on *cfProvider so the wfctl
+// `infra import-all` path can paginate the account's zones in one round-trip
+// per page.
+func (s *cfIaCServer) EnumerateAll(ctx context.Context, req *pb.EnumerateAllRequest) (*pb.EnumerateAllResponse, error) {
+	if s.zones == nil {
+		return nil, fmt.Errorf("cloudflare iacserver: EnumerateAll called before Initialize")
+	}
+	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, zones: s.zones}
+	outs, err := p.EnumerateAll(ctx, req.GetResourceType())
+	if err != nil {
+		return nil, err
+	}
+	pbOuts := make([]*pb.ResourceOutput, 0, len(outs))
+	for _, o := range outs {
+		if o == nil {
+			continue
+		}
+		outputsJSON, err := marshalJSONAny(o.Outputs)
+		if err != nil {
+			return nil, fmt.Errorf("cloudflare iacserver: encode EnumerateAll outputs: %w", err)
+		}
+		sensitive := make(map[string]bool, len(o.Sensitive))
+		for k, v := range o.Sensitive {
+			sensitive[k] = v
+		}
+		pbOuts = append(pbOuts, &pb.ResourceOutput{
+			Name:        o.Name,
+			Type:        o.Type,
+			ProviderId:  o.ProviderID,
+			OutputsJson: outputsJSON,
+			Sensitive:   sensitive,
+			Status:      o.Status,
+		})
+	}
+	return &pb.EnumerateAllResponse{Outputs: pbOuts}, nil
+}
+
+// zonePager is the minimal iterator surface EnumerateAll needs to walk
+// a paginated zone listing. cloudflare-go/v7's
+// *pagination.V4PagePaginationArrayAutoPager[zones.Zone] satisfies this
+// interface structurally (Next() bool, Current() zones.Zone, Err() error),
+// as does the test fake slicePager.
+type zonePager interface {
+	Next() bool
+	Current() zones.Zone
+	Err() error
+}
+
+// zoneListerCF abstracts the account-level zone-list call so the EnumerateAll
+// path can be tested with a slice-backed fake (slicePager) without spinning
+// up the real cloudflare-go SDK client. Production wraps
+// sdkClient.Zones.ListAutoPaging — see cfRealZoneLister.
+type zoneListerCF interface {
+	ListZones(ctx context.Context, query zones.ZoneListParams) zonePager
+}
+
+type cfRealZoneLister struct {
+	client *cloudflare.Client
+}
+
+// ListZones returns the SDK's V4PagePaginationArrayAutoPager which already
+// implements Next()/Current()/Err() and therefore satisfies zonePager.
+func (l *cfRealZoneLister) ListZones(ctx context.Context, q zones.ZoneListParams) zonePager {
+	return l.client.Zones.ListAutoPaging(ctx, q)
+}
+
 type cfProvider struct {
 	dnsDriver    *drivers.DNSDriver
 	domainDriver *drivers.DomainDriver
+	// zones is the injected account-level zone lister used by EnumerateAll
+	// for resource type "infra.dns". May be nil for code paths that don't
+	// touch enumeration (e.g. legacy Plan/Apply paths in tests).
+	zones zoneListerCF
 }
 
 func (p *cfProvider) Name() string    { return "cloudflare" }
@@ -297,6 +389,39 @@ func (p *cfProvider) BootstrapStateBackend(_ context.Context, _ map[string]any) 
 	return nil, nil
 }
 func (p *cfProvider) Close() error { return nil }
+
+// EnumerateAll implements interfaces.EnumeratorAll for resource type
+// "infra.dns". Walks the account's zones via the injected zoneListerCF
+// (production wraps cloudflare-go/v7 Zones.ListAutoPaging — see
+// cfRealZoneLister). Each *ResourceOutput carries the zone name + account_id
+// so the downstream IaCProvider.Import path can adopt the zone without a
+// second account-level round-trip.
+func (p *cfProvider) EnumerateAll(ctx context.Context, resourceType string) ([]*interfaces.ResourceOutput, error) {
+	if p.zones == nil {
+		return nil, fmt.Errorf("cloudflare: EnumerateAll called on provider that is not initialized — call Initialize first")
+	}
+	if resourceType != "infra.dns" {
+		return nil, fmt.Errorf("cloudflare: EnumerateAll: resource type %q not supported", resourceType)
+	}
+	var out []*interfaces.ResourceOutput
+	pager := p.zones.ListZones(ctx, zones.ZoneListParams{})
+	for pager.Next() {
+		zone := pager.Current()
+		out = append(out, &interfaces.ResourceOutput{
+			ProviderID: zone.ID,
+			Type:       "infra.dns",
+			Outputs: map[string]any{
+				"zone":       zone.Name,
+				"account_id": zone.Account.ID,
+				"zone_id":    zone.ID,
+			},
+		})
+	}
+	if err := pager.Err(); err != nil {
+		return nil, fmt.Errorf("cloudflare: EnumerateAll infra.dns: %w", err)
+	}
+	return out, nil
+}
 
 func unmarshalJSONMap(b []byte) (map[string]any, error) {
 	if len(b) == 0 {
