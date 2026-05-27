@@ -11,6 +11,8 @@ import (
 	"github.com/GoCodeAlone/workflow/interfaces"
 	"github.com/GoCodeAlone/workflow/platform"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
+	"github.com/cloudflare/cloudflare-go/v7"
+	"github.com/cloudflare/cloudflare-go/v7/zones"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -224,9 +226,42 @@ func (s *cfIaCServer) FinalizeApply(_ context.Context, _ *pb.FinalizeApplyReques
 	return &pb.FinalizeApplyResponse{}, nil
 }
 
+// zonePager is the minimal iterator surface EnumerateAll needs to walk
+// a paginated zone listing. cloudflare-go/v7's
+// *pagination.V4PagePaginationArrayAutoPager[zones.Zone] satisfies this
+// interface structurally (Next() bool, Current() zones.Zone, Err() error),
+// as does the test fake slicePager.
+type zonePager interface {
+	Next() bool
+	Current() zones.Zone
+	Err() error
+}
+
+// zoneListerCF abstracts the account-level zone-list call so the EnumerateAll
+// path can be tested with a slice-backed fake (slicePager) without spinning
+// up the real cloudflare-go SDK client. Production wraps
+// sdkClient.Zones.ListAutoPaging — see cfRealZoneLister.
+type zoneListerCF interface {
+	ListZones(ctx context.Context, query zones.ZoneListParams) zonePager
+}
+
+type cfRealZoneLister struct {
+	client *cloudflare.Client
+}
+
+// ListZones returns the SDK's V4PagePaginationArrayAutoPager which already
+// implements Next()/Current()/Err() and therefore satisfies zonePager.
+func (l *cfRealZoneLister) ListZones(ctx context.Context, q zones.ZoneListParams) zonePager {
+	return l.client.Zones.ListAutoPaging(ctx, q)
+}
+
 type cfProvider struct {
 	dnsDriver    *drivers.DNSDriver
 	domainDriver *drivers.DomainDriver
+	// zones is the injected account-level zone lister used by EnumerateAll
+	// for resource type "infra.dns". May be nil for code paths that don't
+	// touch enumeration (e.g. legacy Plan/Apply paths in tests).
+	zones zoneListerCF
 }
 
 func (p *cfProvider) Name() string    { return "cloudflare" }

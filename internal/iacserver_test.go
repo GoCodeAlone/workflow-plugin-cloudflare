@@ -9,6 +9,7 @@ import (
 
 	"github.com/GoCodeAlone/workflow-plugin-cloudflare/internal/drivers"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
+	"github.com/cloudflare/cloudflare-go/v7/zones"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -213,4 +214,88 @@ func (serverFakeRegistrarClient) GetRegistrationStatus(_ context.Context, _, _ s
 }
 func (serverFakeRegistrarClient) GetUpdateStatus(_ context.Context, _, _ string) (*drivers.RegistrarWorkflowStatus, error) {
 	return nil, nil
+}
+
+// ── EnumerateAll(infra.dns) coverage ────────────────────────────────────────
+
+// slicePager is a deterministic in-memory zonePager used to drive EnumerateAll
+// tests without touching the real cloudflare-go AutoPager (which is hard to
+// construct from a slice in unit tests).
+type slicePager struct {
+	items []zones.Zone
+	i     int
+	cur   zones.Zone
+	err   error
+}
+
+func (p *slicePager) Next() bool {
+	if p.i >= len(p.items) {
+		return false
+	}
+	p.cur = p.items[p.i]
+	p.i++
+	return true
+}
+
+func (p *slicePager) Current() zones.Zone { return p.cur }
+func (p *slicePager) Err() error          { return p.err }
+
+type fakeZoneLister struct {
+	items []zones.Zone
+	err   error
+}
+
+func (f *fakeZoneLister) ListZones(_ context.Context, _ zones.ZoneListParams) zonePager {
+	return &slicePager{items: f.items, err: f.err}
+}
+
+func TestCfProvider_EnumerateAll_DNS(t *testing.T) {
+	ctx := context.Background()
+	p := &cfProvider{
+		zones: &fakeZoneLister{items: []zones.Zone{
+			{ID: "zid-1", Name: "alpha.test", Account: zones.ZoneAccount{ID: "acct-1"}},
+			{ID: "zid-2", Name: "beta.test", Account: zones.ZoneAccount{ID: "acct-1"}},
+		}},
+	}
+	out, err := p.EnumerateAll(ctx, "infra.dns")
+	if err != nil {
+		t.Fatalf("EnumerateAll: %v", err)
+	}
+	if len(out) != 2 {
+		t.Fatalf("want 2 zones; got %d", len(out))
+	}
+	if out[0].ProviderID != "zid-1" {
+		t.Errorf("providerID[0] = %q; want %q", out[0].ProviderID, "zid-1")
+	}
+	if out[0].Type != "infra.dns" {
+		t.Errorf("type[0] = %q; want infra.dns", out[0].Type)
+	}
+	if out[0].Outputs["zone"] != "alpha.test" {
+		t.Errorf("zone[0] = %v; want alpha.test", out[0].Outputs["zone"])
+	}
+	if out[0].Outputs["account_id"] != "acct-1" {
+		t.Errorf("account_id[0] = %v; want acct-1", out[0].Outputs["account_id"])
+	}
+	if out[0].Outputs["zone_id"] != "zid-1" {
+		t.Errorf("zone_id[0] = %v; want zid-1", out[0].Outputs["zone_id"])
+	}
+	if out[1].ProviderID != "zid-2" || out[1].Outputs["zone"] != "beta.test" {
+		t.Errorf("zone[1] mismatch: %+v", out[1])
+	}
+}
+
+func TestCfProvider_EnumerateAll_DNS_uninitialized(t *testing.T) {
+	p := &cfProvider{}
+	_, err := p.EnumerateAll(context.Background(), "infra.dns")
+	if err == nil {
+		t.Fatalf("want uninitialized error; got nil")
+	}
+}
+
+func TestCfProvider_EnumerateAll_DNS_unsupportedType(t *testing.T) {
+	p := &cfProvider{zones: &fakeZoneLister{}}
+	_, err := p.EnumerateAll(context.Background(), "infra.compute")
+	if err == nil {
+		t.Fatalf("want unsupported-type error; got nil")
+	}
 }
