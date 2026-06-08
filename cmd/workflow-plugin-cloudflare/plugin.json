@@ -37,5 +37,53 @@
       "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; registrar import/status also requires Registrar read access and auto-renew updates require Registrar edit access.",
       "prompt": "Cloudflare API token"
     }
-  ]
+  ],
+    "secret_targets": [
+      {
+        "provider": "github",
+        "scopes": [
+          "repo",
+          "env",
+          "org"
+        ],
+        "description": "Stored as GitHub Actions secrets when workflows run on GitHub."
+      },
+      {
+        "provider": "gitlab",
+        "scopes": [
+          "project",
+          "group",
+          "env"
+        ],
+        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab."
+      },
+      {
+        "provider": "vault",
+        "scopes": [
+          "mount"
+        ],
+        "description": "Stored in Vault for application/runtime retrieval."
+      },
+      {
+        "provider": "file",
+        "scopes": [
+          "directory"
+        ],
+        "description": "Stored in a local file-backed secret store."
+      },
+      {
+        "provider": "keychain",
+        "scopes": [
+          "service"
+        ],
+        "description": "Stored in the local OS keychain."
+      },
+      {
+        "provider": "env",
+        "scopes": [
+          "process"
+        ],
+        "description": "Provided by the local process environment."
+      }
+    ]
 }
