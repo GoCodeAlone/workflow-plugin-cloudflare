@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-cloudflare",
-  "version": "0.1.1",
-  "description": "Cloudflare DNS provider for workflow IaC (infra.dns)",
+  "version": "0.1.4",
+  "description": "Cloudflare DNS and Registrar provider for workflow IaC (infra.dns, infra.domain)",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -38,7 +38,7 @@
       "prompt": "Cloudflare API token"
     }
   ],
-    "secret_targets": [
+  "secret_targets": [
       {
         "provider": "github",
         "scopes": [
@@ -52,10 +52,9 @@
         "provider": "gitlab",
         "scopes": [
           "project",
-          "group",
-          "env"
+          "group"
         ],
-        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab."
+        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab; variables may also be narrowed with GitLab's separate environment_scope field."
       },
       {
         "provider": "vault",

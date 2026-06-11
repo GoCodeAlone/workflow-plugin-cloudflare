@@ -1,10 +1,10 @@
 # workflow-plugin-cloudflare
 
-Cloudflare DNS provider for the GoCodeAlone/workflow IaC surface.
-Implements `infra.dns` using the official
+Cloudflare DNS and Registrar provider for the GoCodeAlone/workflow IaC surface.
+Implements `infra.dns` and `infra.domain` using the official
 [`cloudflare-go/v7`](https://github.com/cloudflare/cloudflare-go) SDK.
-It also exposes an import-first `infra.domain` resource for Cloudflare
-Registrar metadata and guarded auto-renew management.
+`infra.domain` is import-first and covers Cloudflare Registrar metadata plus
+guarded auto-renew management.
 
 One `infra.dns` resource manages one Cloudflare zone. Create and update
 operations upsert declared records by default. Records that exist in
@@ -19,8 +19,8 @@ modules:
     type: iac.provider.cloudflare
     config:
       api_token: ${CLOUDFLARE_API_TOKEN}
-      # account_id is required for infra.domain import/read/update.
-      # infra.dns should keep setting account_id per resource when creating zones.
+      # account_id is non-secret configuration. It is required for creating
+      # missing zones and for infra.domain registrar operations.
       account_id: ${CLOUDFLARE_ACCOUNT_ID}
 
 resources:
@@ -72,6 +72,12 @@ mode, expiration, and Cloudflare async workflow snapshots when readable.
 |------|-----------|--------|
 | `CLOUDFLARE_API_TOKEN` | yes | Cloudflare API token |
 
+`CLOUDFLARE_ACCOUNT_ID` is intentionally not listed as a required secret. It is
+provider configuration, not credential material. Set it on the
+`iac.provider.cloudflare` module when a workflow creates missing zones or uses
+`infra.domain`. You may also set `account_id` per `infra.dns` resource when
+different zones live in different Cloudflare accounts.
+
 For existing-zone import and DNS management, use a token with Zone:Read and
 DNS:Edit scoped to the relevant zones. Creating a missing zone also requires
 permission to create zones in the target account. Registrar import/status needs
@@ -87,6 +93,25 @@ DNS records returned by the Cloudflare API.
 For `infra.domain`, the provider ID is the domain name and `account_id` must be
 configured on the provider module because Cloudflare Registrar APIs are
 account-scoped.
+
+## Go Integration Notes
+
+The runtime entrypoint is `cmd/workflow-plugin-cloudflare`, which serves
+`internal.NewIaCServer` through Workflow's external plugin host. Application code
+usually references this plugin from a Workflow manifest with
+`iac.provider.cloudflare`; direct Go imports are mainly useful for provider
+tests.
+
+The production implementation uses `github.com/cloudflare/cloudflare-go/v7`.
+Tests should use the driver constructors that accept narrow interfaces:
+`drivers.NewDNSDriverWithClient` for zone and record behavior, and
+`drivers.NewDomainDriverWithClient` for Cloudflare Registrar behavior. That
+keeps tests deterministic and avoids requiring live Cloudflare credentials.
+
+`infra.dns` can read or update existing zones by provider ID. Creating a missing
+zone requires `account_id` because Cloudflare zone creation is account-scoped.
+`infra.domain` always requires `account_id`, because Cloudflare Registrar APIs
+are account-scoped.
 
 ## Deletion Safety
 

@@ -16,18 +16,18 @@ jobs:
         with:
           go-version-file: go.mod
           check-latest: true
-      - name: Install wfctl v0.78.0
+      - name: Install wfctl v0.79.0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WFCTL_VERSION: v0.78.0
+          WFCTL_VERSION: v0.79.0
         run: |
           set -euo pipefail
           runner_arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
           asset="wfctl-linux-${runner_arch}"
           download_dir="$(mktemp -d)"
           case "${asset}" in
-            wfctl-linux-amd64) expected_sha="63ac0957274e702930045c9c49955ab2a80b2ee9660da04d4fb4a45c8217f7d2" ;;
-            wfctl-linux-arm64) expected_sha="47a7d380837e404e00930b2a4bc504d583bf606520bc58c29dc984d21e704929" ;;
+            wfctl-linux-amd64) expected_sha="6d07e8fb3a18a4cd0d0c4d4c5a4630b834f4b0705a73b5f111102b4b53d5e044" ;;
+            wfctl-linux-arm64) expected_sha="0492403f1cef20e0a8d18fe4ae172c17f24b412d263d233fd1d174dcd4de1b66" ;;
             *) echo "::error::unsupported wfctl asset ${asset}"; exit 1 ;;
           esac
           gh release download "${WFCTL_VERSION}" \
