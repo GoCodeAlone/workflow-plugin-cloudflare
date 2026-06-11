@@ -63,19 +63,28 @@ type Record struct {
 }
 
 type DNSDriver struct {
-	client CloudflareClient
+	client           CloudflareClient
+	defaultAccountID string
 }
 
 func NewDNSDriver(apiToken string) *DNSDriver {
 	return &DNSDriver{client: newSDKClient(apiToken)}
 }
 
+func NewDNSDriverWithAccount(apiToken, accountID string) *DNSDriver {
+	return &DNSDriver{client: newSDKClient(apiToken), defaultAccountID: strings.TrimSpace(accountID)}
+}
+
 func NewDNSDriverWithClient(client CloudflareClient) *DNSDriver {
 	return &DNSDriver{client: client}
 }
 
+func NewDNSDriverWithClientAndAccount(client CloudflareClient, accountID string) *DNSDriver {
+	return &DNSDriver{client: client, defaultAccountID: strings.TrimSpace(accountID)}
+}
+
 func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	parsed, err := parseDNSSpec(spec, true)
+	parsed, err := parseDNSSpec(spec, true, d.defaultAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns create %q: %w", spec.Name, err)
 	}
@@ -99,7 +108,7 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 }
 
 func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
-	parsed, err := parseDNSSpec(spec, true)
+	parsed, err := parseDNSSpec(spec, true, d.defaultAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns update %q: %w", ref.Name, err)
 	}
@@ -135,7 +144,7 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 	if current == nil {
 		return &interfaces.DiffResult{NeedsUpdate: true}, nil
 	}
-	parsed, err := parseDNSSpec(desired, true)
+	parsed, err := parseDNSSpec(desired, true, d.defaultAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns diff: %w", err)
 	}
@@ -245,7 +254,7 @@ type dnsSpec struct {
 	Records        []Record
 }
 
-func parseDNSSpec(spec interfaces.ResourceSpec, requireRecords bool) (dnsSpec, error) {
+func parseDNSSpec(spec interfaces.ResourceSpec, requireRecords bool, defaultAccountID string) (dnsSpec, error) {
 	domain, _ := spec.Config["domain"].(string)
 	if domain == "" {
 		domain = spec.Name
@@ -253,9 +262,11 @@ func parseDNSSpec(spec interfaces.ResourceSpec, requireRecords bool) (dnsSpec, e
 	if domain == "" || !interfaces.ValidateProviderID(domain, interfaces.IDFormatDomainName) {
 		return dnsSpec{}, fmt.Errorf("domain %q is not a valid domain name", domain)
 	}
-	parsed := dnsSpec{Domain: domain}
+	parsed := dnsSpec{Domain: domain, AccountID: strings.TrimSpace(defaultAccountID)}
 	parsed.ZoneID, _ = spec.Config["zone_id"].(string)
-	parsed.AccountID, _ = spec.Config["account_id"].(string)
+	if accountID, _ := spec.Config["account_id"].(string); strings.TrimSpace(accountID) != "" {
+		parsed.AccountID = strings.TrimSpace(accountID)
+	}
 	if b, ok := spec.Config["manage_unlisted"].(bool); ok {
 		parsed.ManageUnlisted = b
 	}
