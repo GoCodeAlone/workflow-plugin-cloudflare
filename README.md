@@ -72,11 +72,21 @@ mode, expiration, and Cloudflare async workflow snapshots when readable.
 |------|-----------|--------|
 | `CLOUDFLARE_API_TOKEN` | yes | Cloudflare API token |
 
-`CLOUDFLARE_ACCOUNT_ID` is intentionally not listed as a required secret. It is
-provider configuration, not credential material. Set it on the
-`iac.provider.cloudflare` module when a workflow creates missing zones or uses
-`infra.domain`. You may also set `account_id` per `infra.dns` resource when
-different zones live in different Cloudflare accounts.
+## Required configuration
+
+| Name | Sensitive | Source |
+|------|-----------|--------|
+| `CLOUDFLARE_ACCOUNT_ID` | no | Cloudflare account ID |
+
+`CLOUDFLARE_ACCOUNT_ID` is provider configuration, not credential material. Set
+it on the `iac.provider.cloudflare` module when a workflow creates missing zones
+or uses `infra.domain`. You may also set `account_id` per `infra.dns` resource
+when different zones live in different Cloudflare accounts.
+
+```sh
+wfctl secrets setup --plugin workflow-plugin-cloudflare
+wfctl vars setup --plugin workflow-plugin-cloudflare
+```
 
 For existing-zone import and DNS management, use a token with Zone:Read and
 DNS:Edit scoped to the relevant zones. Creating a missing zone also requires
