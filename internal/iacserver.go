@@ -86,7 +86,7 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 		return nil, fmt.Errorf("cloudflare iacserver: invalid config: %w", err)
 	}
 	s.cfg = cfg
-	s.dnsDriver = drivers.NewDNSDriver(cfg.APIToken)
+	s.dnsDriver = drivers.NewDNSDriverWithAccount(cfg.APIToken, cfg.AccountID)
 	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
 	s.zones = newRealZoneLister(cfg.APIToken)
 	return &pb.InitializeResponse{}, nil

@@ -10,15 +10,16 @@ import (
 )
 
 type fakeCFClient struct {
-	zone           *Zone
-	records        []Record
-	dnssec         *DNSSEC
-	lastGetDomain  string
-	lastGetZoneID  string
-	createdZones   []string
-	createdRecords []Record
-	updatedRecords []Record
-	deletedRecords []string
+	zone            *Zone
+	records         []Record
+	dnssec          *DNSSEC
+	lastGetDomain   string
+	lastGetZoneID   string
+	createdZones    []string
+	createdAccounts []string
+	createdRecords  []Record
+	updatedRecords  []Record
+	deletedRecords  []string
 }
 
 func (f *fakeCFClient) GetZone(_ context.Context, domain, zoneID string) (*Zone, error) {
@@ -33,10 +34,50 @@ func (f *fakeCFClient) GetZone(_ context.Context, domain, zoneID string) (*Zone,
 	return nil, errors.New("zone not found")
 }
 
-func (f *fakeCFClient) CreateZone(_ context.Context, _ string, domain string) (*Zone, error) {
+func (f *fakeCFClient) CreateZone(_ context.Context, accountID string, domain string) (*Zone, error) {
+	f.createdAccounts = append(f.createdAccounts, accountID)
 	f.createdZones = append(f.createdZones, domain)
 	f.zone = &Zone{ID: "zone-created", Name: domain, Status: "pending", NameServers: []string{"a.ns.cloudflare.com", "b.ns.cloudflare.com"}}
 	return f.zone, nil
+}
+
+func TestDNSDriver_CreateUsesDefaultAccountID(t *testing.T) {
+	fake := &fakeCFClient{}
+	driver := NewDNSDriverWithClientAndAccount(fake, "acct-default")
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":  "example.com",
+			"records": []any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(fake.createdAccounts) != 1 || fake.createdAccounts[0] != "acct-default" {
+		t.Fatalf("createdAccounts = %#v, want acct-default", fake.createdAccounts)
+	}
+}
+
+func TestDNSDriver_CreateResourceAccountIDOverridesDefault(t *testing.T) {
+	fake := &fakeCFClient{}
+	driver := NewDNSDriverWithClientAndAccount(fake, "acct-default")
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":     "example.com",
+			"account_id": "acct-resource",
+			"records":    []any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(fake.createdAccounts) != 1 || fake.createdAccounts[0] != "acct-resource" {
+		t.Fatalf("createdAccounts = %#v, want acct-resource", fake.createdAccounts)
+	}
 }
 
 func (f *fakeCFClient) DeleteZone(_ context.Context, zoneID string) error { return nil }
