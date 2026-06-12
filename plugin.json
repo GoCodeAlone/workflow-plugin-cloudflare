@@ -1,6 +1,6 @@
 {
   "name": "workflow-plugin-cloudflare",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Cloudflare DNS and Registrar provider for workflow IaC (infra.dns, infra.domain)",
   "author": "GoCodeAlone",
   "license": "MIT",
