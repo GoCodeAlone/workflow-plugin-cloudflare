@@ -211,6 +211,38 @@ func TestDNSDriver_ReadTreatsDomainProviderIDAsDomainNotZoneID(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_ReadMissingZoneReturnsResourceNotFound(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	_, err := driver.Read(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "example.com"})
+	if err == nil {
+		t.Fatal("Read missing zone: expected error, got nil")
+	}
+	if !errors.Is(err, interfaces.ErrResourceNotFound) {
+		t.Fatalf("Read missing zone error = %v, want ErrResourceNotFound", err)
+	}
+}
+
+func TestDNSDriver_AdoptionRefUsesDomainProviderID(t *testing.T) {
+	driver := NewDNSDriverWithClientAndAccount(&fakeCFClient{}, "acct")
+	ref, ok, err := driver.AdoptionRef(interfaces.ResourceSpec{
+		Name: "cf-example-com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":  "example.com",
+			"records": []any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AdoptionRef: %v", err)
+	}
+	if !ok {
+		t.Fatal("AdoptionRef ok = false, want true")
+	}
+	if ref.Name != "example.com" || ref.ProviderID != "example.com" || ref.Type != "infra.dns" {
+		t.Fatalf("AdoptionRef = %#v, want domain name/provider id", ref)
+	}
+}
+
 func TestDNSDriver_DiffDetectsProxiedTTLAndPriority(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{

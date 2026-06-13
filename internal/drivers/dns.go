@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
 	"sort"
@@ -102,6 +103,9 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 	domain, zoneID := domainAndZoneIDFromRef(ref)
 	zone, err := d.client.GetZone(ctx, domain, zoneID)
 	if err != nil {
+		if isCloudflareNotFound(err) {
+			return nil, fmt.Errorf("%w: cloudflare dns read %q: %w", interfaces.ErrResourceNotFound, ref.Name, err)
+		}
 		return nil, fmt.Errorf("cloudflare dns read %q: %w", ref.Name, err)
 	}
 	return d.readOutput(ctx, ref.Name, zone)
@@ -193,10 +197,31 @@ func (d *DNSDriver) ensureZone(ctx context.Context, parsed dnsSpec) (*Zone, erro
 	if err == nil {
 		return zone, nil
 	}
+	if !isCloudflareNotFound(err) {
+		return nil, err
+	}
 	if parsed.AccountID == "" {
 		return nil, err
 	}
 	return d.client.CreateZone(ctx, parsed.AccountID, parsed.Domain)
+}
+
+func (d *DNSDriver) AdoptionRef(spec interfaces.ResourceSpec) (interfaces.ResourceRef, bool, error) {
+	parsed, err := parseDNSSpec(spec, true, d.defaultAccountID)
+	if err != nil {
+		return interfaces.ResourceRef{}, false, err
+	}
+	return interfaces.ResourceRef{Name: parsed.Domain, Type: "infra.dns", ProviderID: parsed.Domain}, true, nil
+}
+
+func isCloudflareNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, interfaces.ErrResourceNotFound) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
 }
 
 func (d *DNSDriver) readOutput(ctx context.Context, name string, zone *Zone) (*interfaces.ResourceOutput, error) {
