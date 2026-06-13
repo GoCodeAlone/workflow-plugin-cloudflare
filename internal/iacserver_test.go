@@ -264,8 +264,11 @@ func TestCfProvider_EnumerateAll_DNS(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("want 2 zones; got %d", len(out))
 	}
-	if out[0].ProviderID != "zid-1" {
-		t.Errorf("providerID[0] = %q; want %q", out[0].ProviderID, "zid-1")
+	if out[0].Name != "alpha.test" {
+		t.Errorf("name[0] = %q; want alpha.test", out[0].Name)
+	}
+	if out[0].ProviderID != "alpha.test" {
+		t.Errorf("providerID[0] = %q; want alpha.test", out[0].ProviderID)
 	}
 	if out[0].Type != "infra.dns" {
 		t.Errorf("type[0] = %q; want infra.dns", out[0].Type)
@@ -279,7 +282,7 @@ func TestCfProvider_EnumerateAll_DNS(t *testing.T) {
 	if out[0].Outputs["zone_id"] != "zid-1" {
 		t.Errorf("zone_id[0] = %v; want zid-1", out[0].Outputs["zone_id"])
 	}
-	if out[1].ProviderID != "zid-2" || out[1].Outputs["zone"] != "beta.test" {
+	if out[1].ProviderID != "beta.test" || out[1].Outputs["zone"] != "beta.test" {
 		t.Errorf("zone[1] mismatch: %+v", out[1])
 	}
 }
@@ -320,8 +323,11 @@ func TestCfIaCServer_EnumerateAll_DNS(t *testing.T) {
 		t.Fatalf("want 2 outputs; got %d", len(resp.GetOutputs()))
 	}
 	first := resp.GetOutputs()[0]
-	if first.GetProviderId() != "zid-1" {
-		t.Errorf("providerID = %q; want zid-1", first.GetProviderId())
+	if first.GetName() != "alpha.test" {
+		t.Errorf("name = %q; want alpha.test", first.GetName())
+	}
+	if first.GetProviderId() != "alpha.test" {
+		t.Errorf("providerID = %q; want alpha.test", first.GetProviderId())
 	}
 	if first.GetType() != "infra.dns" {
 		t.Errorf("type = %q; want infra.dns", first.GetType())
