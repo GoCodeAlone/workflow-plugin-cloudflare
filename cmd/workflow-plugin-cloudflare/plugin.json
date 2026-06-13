@@ -25,7 +25,14 @@
     "resourceTypes": [
       "infra.dns",
       "infra.domain"
-    ]
+    ],
+    "iacProvider": {
+      "name": "cloudflare",
+      "resourceTypes": [
+        "infra.dns",
+        "infra.domain"
+      ]
+    }
   },
   "iacProvider": {
     "computePlanVersion": "v2"
