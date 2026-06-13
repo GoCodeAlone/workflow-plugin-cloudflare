@@ -28,6 +28,7 @@ type cfIaCServer struct {
 	// below so the SDK auto-registers IaCProviderEnumerator at plugin startup
 	// for the `infra.dns` enumeration path.
 	pb.UnimplementedIaCProviderEnumeratorServer
+	pb.UnimplementedResourceDriverServer
 
 	cfg          Config
 	dnsDriver    *drivers.DNSDriver
@@ -41,6 +42,7 @@ var (
 	_ pb.IaCProviderRequiredServer   = (*cfIaCServer)(nil)
 	_ pb.IaCProviderFinalizerServer  = (*cfIaCServer)(nil)
 	_ pb.IaCProviderEnumeratorServer = (*cfIaCServer)(nil)
+	_ pb.ResourceDriverServer        = (*cfIaCServer)(nil)
 )
 
 func NewIaCServer() *cfIaCServer {
