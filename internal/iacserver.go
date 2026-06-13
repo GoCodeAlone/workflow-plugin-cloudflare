@@ -408,7 +408,8 @@ func (p *cfProvider) EnumerateAll(ctx context.Context, resourceType string) ([]*
 	for pager.Next() {
 		zone := pager.Current()
 		out = append(out, &interfaces.ResourceOutput{
-			ProviderID: zone.ID,
+			Name:       zone.Name,
+			ProviderID: zone.Name,
 			Type:       "infra.dns",
 			Outputs: map[string]any{
 				"zone":       zone.Name,
