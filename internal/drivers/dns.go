@@ -741,11 +741,18 @@ type sdkClient struct {
 }
 
 func newSDKClient(apiToken string, requestTimeout time.Duration) *sdkClient {
+	return newSDKClientWithOptions(apiToken, requestTimeout)
+}
+
+func newSDKClientWithOptions(apiToken string, requestTimeout time.Duration, opts ...option.RequestOption) *sdkClient {
 	timeout := NormalizeRequestTimeout(requestTimeout)
-	return &sdkClient{client: cloudflare.NewClient(
+	clientOpts := []option.RequestOption{
 		option.WithAPIToken(apiToken),
 		option.WithHTTPClient(&http.Client{Timeout: timeout}),
-	)}
+		option.WithMaxRetries(0),
+	}
+	clientOpts = append(clientOpts, opts...)
+	return &sdkClient{client: cloudflare.NewClient(clientOpts...)}
 }
 
 func (c *sdkClient) GetZone(ctx context.Context, domain, zoneID string) (*Zone, error) {

@@ -3,11 +3,17 @@ package drivers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
+	"github.com/cloudflare/cloudflare-go/v7/option"
 )
 
 type fakeCFClient struct {
@@ -180,6 +186,32 @@ func TestDNSDriver_RequestTimeoutDoesNotShrinkOperationTimeout(t *testing.T) {
 	driver := NewDNSDriverWithAccountRequestTimeout("token", "acct", 10*time.Millisecond)
 	if driver.operationTimeout != defaultOperationTimeout {
 		t.Fatalf("operationTimeout = %s, want %s", driver.operationTimeout, defaultOperationTimeout)
+	}
+}
+
+func TestSDKClientCreateZoneDoesNotRetryConflict(t *testing.T) {
+	var hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/zones" {
+			t.Errorf("request = %s %s, want POST /zones", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprint(w, `{"success":false,"errors":[{"code":1099,"message":"conflict"}],"messages":[],"result":null}`)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newSDKClientWithOptions("token", time.Second, option.WithBaseURL(server.URL))
+	_, err := client.CreateZone(context.Background(), "acct", "example.com")
+	if err == nil {
+		t.Fatal("CreateZone returned nil error, want conflict")
+	}
+	if strings.Contains(err.Error(), context.DeadlineExceeded.Error()) {
+		t.Fatalf("CreateZone error = %v, want API conflict without context deadline", err)
+	}
+	if got := hits.Load(); got != 1 {
+		t.Fatalf("POST /zones hits = %d, want 1", got)
 	}
 }
 
