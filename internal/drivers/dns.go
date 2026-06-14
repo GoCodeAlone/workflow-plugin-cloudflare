@@ -70,7 +70,19 @@ type DNSDriver struct {
 	operationTimeout time.Duration
 }
 
-const defaultOperationTimeout = 30 * time.Second
+const (
+	defaultRequestTimeout   = 30 * time.Second
+	defaultOperationTimeout = 2 * time.Minute
+)
+
+// NormalizeRequestTimeout returns the per-HTTP-request Cloudflare API timeout,
+// falling back to the provider default when callers pass a zero value.
+func NormalizeRequestTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultRequestTimeout
+	}
+	return timeout
+}
 
 // NormalizeOperationTimeout returns the Cloudflare API operation timeout,
 // falling back to the provider default when callers pass a zero value.
@@ -86,16 +98,27 @@ func (d *DNSDriver) operationContext(ctx context.Context) (context.Context, cont
 }
 
 func NewDNSDriver(apiToken string) *DNSDriver {
-	return &DNSDriver{client: newSDKClient(apiToken, defaultOperationTimeout), operationTimeout: defaultOperationTimeout}
+	return NewDNSDriverWithAccountRequestTimeout(apiToken, "", 0)
 }
 
 func NewDNSDriverWithAccount(apiToken, accountID string) *DNSDriver {
-	return NewDNSDriverWithAccountTimeout(apiToken, accountID, defaultOperationTimeout)
+	return NewDNSDriverWithAccountRequestTimeout(apiToken, accountID, 0)
 }
 
 func NewDNSDriverWithAccountTimeout(apiToken, accountID string, operationTimeout time.Duration) *DNSDriver {
-	timeout := NormalizeOperationTimeout(operationTimeout)
-	return &DNSDriver{client: newSDKClient(apiToken, timeout), defaultAccountID: strings.TrimSpace(accountID), operationTimeout: timeout}
+	return newDNSDriverWithAccountTimeouts(apiToken, accountID, 0, operationTimeout)
+}
+
+func NewDNSDriverWithAccountRequestTimeout(apiToken, accountID string, requestTimeout time.Duration) *DNSDriver {
+	return newDNSDriverWithAccountTimeouts(apiToken, accountID, requestTimeout, 0)
+}
+
+func newDNSDriverWithAccountTimeouts(apiToken, accountID string, requestTimeout, operationTimeout time.Duration) *DNSDriver {
+	return &DNSDriver{
+		client:           newSDKClient(apiToken, NormalizeRequestTimeout(requestTimeout)),
+		defaultAccountID: strings.TrimSpace(accountID),
+		operationTimeout: NormalizeOperationTimeout(operationTimeout),
+	}
 }
 
 func NewDNSDriverWithClient(client CloudflareClient) *DNSDriver {
@@ -235,12 +258,16 @@ func (d *DNSDriver) ensureZone(ctx context.Context, parsed dnsSpec) (*Zone, erro
 		return zone, nil
 	}
 	if !isCloudflareNotFound(err) {
-		return nil, err
+		return nil, fmt.Errorf("lookup zone %q: %w", parsed.Domain, err)
 	}
 	if parsed.AccountID == "" {
-		return nil, err
+		return nil, fmt.Errorf("lookup zone %q: %w", parsed.Domain, err)
 	}
-	return d.client.CreateZone(ctx, parsed.AccountID, parsed.Domain)
+	zone, err = d.client.CreateZone(ctx, parsed.AccountID, parsed.Domain)
+	if err != nil {
+		return nil, fmt.Errorf("create zone %q: %w", parsed.Domain, err)
+	}
+	return zone, nil
 }
 
 func (d *DNSDriver) AdoptionRef(spec interfaces.ResourceSpec) (interfaces.ResourceRef, bool, error) {
@@ -488,10 +515,14 @@ func supportedRecordType(recordType string) bool {
 }
 
 func normalizeRecordName(name, domain string) string {
-	if name == "@" {
+	trimmed := strings.TrimSuffix(name, ".")
+	if trimmed == "@" {
 		return domain
 	}
-	return strings.TrimSuffix(name, ".")
+	if trimmed == "" || strings.EqualFold(trimmed, domain) || strings.HasSuffix(strings.ToLower(trimmed), "."+strings.ToLower(domain)) {
+		return trimmed
+	}
+	return trimmed + "." + domain
 }
 
 func recordsByKey(records []Record) map[string][]Record {
@@ -709,8 +740,8 @@ type sdkClient struct {
 	client *cloudflare.Client
 }
 
-func newSDKClient(apiToken string, operationTimeout time.Duration) *sdkClient {
-	timeout := NormalizeOperationTimeout(operationTimeout)
+func newSDKClient(apiToken string, requestTimeout time.Duration) *sdkClient {
+	timeout := NormalizeRequestTimeout(requestTimeout)
 	return &sdkClient{client: cloudflare.NewClient(
 		option.WithAPIToken(apiToken),
 		option.WithHTTPClient(&http.Client{Timeout: timeout}),
