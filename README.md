@@ -22,6 +22,8 @@ modules:
       # account_id is non-secret configuration. It is required for creating
       # missing zones and for infra.domain registrar operations.
       account_id: ${CLOUDFLARE_ACCOUNT_ID}
+      # Optional Go duration for Cloudflare API calls. Defaults to 30s.
+      request_timeout: 30s
 
 resources:
   - name: example-com
@@ -82,6 +84,10 @@ mode, expiration, and Cloudflare async workflow snapshots when readable.
 it on the `iac.provider.cloudflare` module when a workflow creates missing zones
 or uses `infra.domain`. You may also set `account_id` per `infra.dns` resource
 when different zones live in different Cloudflare accounts.
+
+Cloudflare API calls are bounded by a 30 second timeout by default. Override
+with provider config `request_timeout` or the `CLOUDFLARE_REQUEST_TIMEOUT`
+environment variable using Go duration syntax, such as `10s` or `1m`.
 
 ```sh
 wfctl secrets setup --plugin workflow-plugin-cloudflare

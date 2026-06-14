@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow/interfaces"
 )
@@ -146,6 +147,42 @@ func TestDNSDriver_CreateCreatesMissingZoneAndRecord(t *testing.T) {
 	if out.Outputs["dnssec"].(map[string]any)["status"] != "active" {
 		t.Fatalf("dnssec output = %#v", out.Outputs["dnssec"])
 	}
+}
+
+func TestDNSDriver_CreateTimesOutBlockedClientOperation(t *testing.T) {
+	fake := &blockingListRecordsClient{
+		fakeCFClient: fakeCFClient{
+			zone: &Zone{ID: "zone", Name: "example.com", Status: "active"},
+		},
+	}
+	driver := NewDNSDriverWithClientAndAccountTimeout(fake, "acct", 10*time.Millisecond)
+	start := time.Now()
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":  "example.com",
+			"records": []any{},
+		},
+	})
+	if err == nil {
+		t.Fatal("Create returned nil error, want context deadline")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Create error = %v, want context deadline", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("Create took %s, want bounded timeout", elapsed)
+	}
+}
+
+type blockingListRecordsClient struct {
+	fakeCFClient
+}
+
+func (f *blockingListRecordsClient) ListRecords(ctx context.Context, _ string) ([]Record, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func TestDNSDriver_ReadIncludesZoneMetadataAndRecords(t *testing.T) {

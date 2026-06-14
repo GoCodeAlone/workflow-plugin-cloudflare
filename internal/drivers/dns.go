@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/netip"
 	"sort"
 	"strings"
@@ -66,25 +67,53 @@ type Record struct {
 type DNSDriver struct {
 	client           CloudflareClient
 	defaultAccountID string
+	operationTimeout time.Duration
+}
+
+const defaultOperationTimeout = 30 * time.Second
+
+// NormalizeOperationTimeout returns the Cloudflare API operation timeout,
+// falling back to the provider default when callers pass a zero value.
+func NormalizeOperationTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 {
+		return defaultOperationTimeout
+	}
+	return timeout
+}
+
+func (d *DNSDriver) operationContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, NormalizeOperationTimeout(d.operationTimeout))
 }
 
 func NewDNSDriver(apiToken string) *DNSDriver {
-	return &DNSDriver{client: newSDKClient(apiToken)}
+	return &DNSDriver{client: newSDKClient(apiToken, defaultOperationTimeout), operationTimeout: defaultOperationTimeout}
 }
 
 func NewDNSDriverWithAccount(apiToken, accountID string) *DNSDriver {
-	return &DNSDriver{client: newSDKClient(apiToken), defaultAccountID: strings.TrimSpace(accountID)}
+	return NewDNSDriverWithAccountTimeout(apiToken, accountID, defaultOperationTimeout)
+}
+
+func NewDNSDriverWithAccountTimeout(apiToken, accountID string, operationTimeout time.Duration) *DNSDriver {
+	timeout := NormalizeOperationTimeout(operationTimeout)
+	return &DNSDriver{client: newSDKClient(apiToken, timeout), defaultAccountID: strings.TrimSpace(accountID), operationTimeout: timeout}
 }
 
 func NewDNSDriverWithClient(client CloudflareClient) *DNSDriver {
-	return &DNSDriver{client: client}
+	return &DNSDriver{client: client, operationTimeout: defaultOperationTimeout}
 }
 
 func NewDNSDriverWithClientAndAccount(client CloudflareClient, accountID string) *DNSDriver {
-	return &DNSDriver{client: client, defaultAccountID: strings.TrimSpace(accountID)}
+	return NewDNSDriverWithClientAndAccountTimeout(client, accountID, defaultOperationTimeout)
+}
+
+func NewDNSDriverWithClientAndAccountTimeout(client CloudflareClient, accountID string, operationTimeout time.Duration) *DNSDriver {
+	timeout := NormalizeOperationTimeout(operationTimeout)
+	return &DNSDriver{client: client, defaultAccountID: strings.TrimSpace(accountID), operationTimeout: timeout}
 }
 
 func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	ctx, cancel := d.operationContext(ctx)
+	defer cancel()
 	parsed, err := parseDNSSpec(spec, true, d.defaultAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns create %q: %w", spec.Name, err)
@@ -100,6 +129,8 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 }
 
 func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.ResourceOutput, error) {
+	ctx, cancel := d.operationContext(ctx)
+	defer cancel()
 	domain, zoneID := domainAndZoneIDFromRef(ref)
 	zone, err := d.client.GetZone(ctx, domain, zoneID)
 	if err != nil {
@@ -112,6 +143,8 @@ func (d *DNSDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (*inte
 }
 
 func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec interfaces.ResourceSpec) (*interfaces.ResourceOutput, error) {
+	ctx, cancel := d.operationContext(ctx)
+	defer cancel()
 	parsed, err := parseDNSSpec(spec, true, d.defaultAccountID)
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns update %q: %w", ref.Name, err)
@@ -130,6 +163,8 @@ func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 }
 
 func (d *DNSDriver) Delete(ctx context.Context, ref interfaces.ResourceRef) error {
+	ctx, cancel := d.operationContext(ctx)
+	defer cancel()
 	zoneID := ref.ProviderID
 	if zoneID == "" {
 		zone, err := d.client.GetZone(ctx, ref.Name, "")
@@ -174,6 +209,8 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 }
 
 func (d *DNSDriver) HealthCheck(ctx context.Context, ref interfaces.ResourceRef) (*interfaces.HealthResult, error) {
+	ctx, cancel := d.operationContext(ctx)
+	defer cancel()
 	if _, err := d.client.GetZone(ctx, ref.Name, ref.ProviderID); err != nil {
 		return &interfaces.HealthResult{Healthy: false, Message: err.Error()}, nil
 	}
@@ -227,7 +264,7 @@ func isCloudflareNotFound(err error) bool {
 func (d *DNSDriver) readOutput(ctx context.Context, name string, zone *Zone) (*interfaces.ResourceOutput, error) {
 	records, err := d.client.ListRecords(ctx, zone.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list records for zone %q: %w", zone.ID, err)
 	}
 	dnssec, _ := d.client.GetDNSSEC(ctx, zone.ID)
 	return dnsOutput(name, zone, records, dnssec), nil
@@ -236,7 +273,7 @@ func (d *DNSDriver) readOutput(ctx context.Context, name string, zone *Zone) (*i
 func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []Record, manageUnlisted bool) error {
 	current, err := d.client.ListRecords(ctx, zoneID)
 	if err != nil {
-		return err
+		return fmt.Errorf("list records for zone %q: %w", zoneID, err)
 	}
 	currentByKey := recordsByKey(current)
 	desiredKeys := map[string]struct{}{}
@@ -246,14 +283,14 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []R
 		existing := currentByKey[key]
 		if len(existing) == 0 {
 			if _, err := d.client.CreateRecord(ctx, zoneID, record); err != nil {
-				return err
+				return fmt.Errorf("create %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 			}
 			continue
 		}
 		currentByKey[key] = existing[1:]
 		if !recordMatches(existing[0], record) {
 			if _, err := d.client.UpdateRecord(ctx, zoneID, existing[0].ID, record); err != nil {
-				return err
+				return fmt.Errorf("update %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 			}
 		}
 	}
@@ -265,7 +302,7 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []R
 			continue
 		}
 		if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
-			return err
+			return fmt.Errorf("delete %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 		}
 	}
 	return nil
@@ -672,8 +709,12 @@ type sdkClient struct {
 	client *cloudflare.Client
 }
 
-func newSDKClient(apiToken string) *sdkClient {
-	return &sdkClient{client: cloudflare.NewClient(option.WithAPIToken(apiToken))}
+func newSDKClient(apiToken string, operationTimeout time.Duration) *sdkClient {
+	timeout := NormalizeOperationTimeout(operationTimeout)
+	return &sdkClient{client: cloudflare.NewClient(
+		option.WithAPIToken(apiToken),
+		option.WithHTTPClient(&http.Client{Timeout: timeout}),
+	)}
 }
 
 func (c *sdkClient) GetZone(ctx context.Context, domain, zoneID string) (*Zone, error) {

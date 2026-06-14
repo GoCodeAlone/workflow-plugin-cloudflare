@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-cloudflare/internal/drivers"
@@ -80,25 +81,29 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: parse config_json: %w", err)
 	}
-	cfg := Config{APIToken: strVal(m, "api_token"), AccountID: strVal(m, "account_id")}
-	if cfg.APIToken == "" {
-		cfg.APIToken = strVal(m, "token")
+	cfg, err := ConfigFromMap(m)
+	if err != nil {
+		return nil, fmt.Errorf("cloudflare iacserver: invalid config: %w", err)
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: invalid config: %w", err)
 	}
 	s.cfg = cfg
-	s.dnsDriver = drivers.NewDNSDriverWithAccount(cfg.APIToken, cfg.AccountID)
+	s.dnsDriver = drivers.NewDNSDriverWithAccountTimeout(cfg.APIToken, cfg.AccountID, cfg.RequestTimeout)
 	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
-	s.zones = newRealZoneLister(cfg.APIToken)
+	s.zones = newRealZoneLister(cfg.APIToken, cfg.RequestTimeout)
 	return &pb.InitializeResponse{}, nil
 }
 
 // newRealZoneLister constructs the production zoneListerCF backed by the
 // cloudflare-go/v7 SDK. Kept separate from Initialize so tests can swap in
 // a slice-backed fake without touching environment-bound auth.
-func newRealZoneLister(apiToken string) zoneListerCF {
-	return &cfRealZoneLister{client: cloudflare.NewClient(option.WithAPIToken(apiToken))}
+func newRealZoneLister(apiToken string, requestTimeout time.Duration) zoneListerCF {
+	timeout := drivers.NormalizeOperationTimeout(requestTimeout)
+	return &cfRealZoneLister{client: cloudflare.NewClient(
+		option.WithAPIToken(apiToken),
+		option.WithHTTPClient(&http.Client{Timeout: timeout}),
+	)}
 }
 
 func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanResponse, error) {
