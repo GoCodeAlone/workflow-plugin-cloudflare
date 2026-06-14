@@ -89,7 +89,7 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 		return nil, fmt.Errorf("cloudflare iacserver: invalid config: %w", err)
 	}
 	s.cfg = cfg
-	s.dnsDriver = drivers.NewDNSDriverWithAccountTimeout(cfg.APIToken, cfg.AccountID, cfg.RequestTimeout)
+	s.dnsDriver = drivers.NewDNSDriverWithAccountRequestTimeout(cfg.APIToken, cfg.AccountID, cfg.RequestTimeout)
 	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
 	s.zones = newRealZoneLister(cfg.APIToken, cfg.RequestTimeout)
 	return &pb.InitializeResponse{}, nil
@@ -99,7 +99,7 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 // cloudflare-go/v7 SDK. Kept separate from Initialize so tests can swap in
 // a slice-backed fake without touching environment-bound auth.
 func newRealZoneLister(apiToken string, requestTimeout time.Duration) zoneListerCF {
-	timeout := drivers.NormalizeOperationTimeout(requestTimeout)
+	timeout := drivers.NormalizeRequestTimeout(requestTimeout)
 	return &cfRealZoneLister{client: cloudflare.NewClient(
 		option.WithAPIToken(apiToken),
 		option.WithHTTPClient(&http.Client{Timeout: timeout}),

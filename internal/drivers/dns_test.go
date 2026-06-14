@@ -176,6 +176,13 @@ func TestDNSDriver_CreateTimesOutBlockedClientOperation(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_RequestTimeoutDoesNotShrinkOperationTimeout(t *testing.T) {
+	driver := NewDNSDriverWithAccountRequestTimeout("token", "acct", 10*time.Millisecond)
+	if driver.operationTimeout != defaultOperationTimeout {
+		t.Fatalf("operationTimeout = %s, want %s", driver.operationTimeout, defaultOperationTimeout)
+	}
+}
+
 type blockingListRecordsClient struct {
 	fakeCFClient
 }
@@ -342,6 +349,39 @@ func TestDNSDriver_DiffDoesNotManageProxiedWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_DiffNormalizesRelativeRecordNames(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{
+				{"type": "A", "name": "*.example.com", "data": "216.40.34.41", "ttl": 900},
+				{"type": "CNAME", "name": "mail.example.com", "data": "mail.hover.com.cust.hostedemail.com", "ttl": 900},
+			},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "*", "data": "216.40.34.41", "ttl": 900},
+				map[string]any{"type": "CNAME", "name": "mail", "data": "mail.hover.com.cust.hostedemail.com", "ttl": 900},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want no update for equivalent relative/FQDN record names", diff)
+	}
+}
+
 func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
 	fake := &fakeCFClient{
 		zone: &Zone{ID: "zone", Name: "example.com"},
@@ -366,6 +406,34 @@ func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
 	}
 	if len(fake.deletedRecords) != 0 {
 		t.Fatalf("deletedRecords = %#v, want none", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_UpdateNormalizesRelativeRecordNamesBeforeMatching(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{ID: "wildcard", Type: "A", Name: "*.example.com", Data: "216.40.34.41", TTL: 900},
+			{ID: "mail", Type: "CNAME", Name: "mail.example.com", Data: "mail.hover.com.cust.hostedemail.com", TTL: 900},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "*", "data": "216.40.34.41", "ttl": 900},
+				map[string]any{"type": "CNAME", "name": "mail", "data": "mail.hover.com.cust.hostedemail.com", "ttl": 900},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.createdRecords) != 0 {
+		t.Fatalf("createdRecords = %#v, want none", fake.createdRecords)
 	}
 }
 
