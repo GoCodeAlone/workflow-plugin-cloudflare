@@ -3,7 +3,9 @@ package drivers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -16,9 +18,10 @@ import (
 )
 
 const (
-	redirectResourceType = "infra.http_redirect"
-	redirectRulesetName  = "Workflow managed redirect rules"
-	redirectPhase        = "http_request_dynamic_redirect"
+	redirectResourceType   = "infra.http_redirect"
+	redirectRulesetName    = "Workflow managed redirect rules"
+	redirectPhase          = "http_request_dynamic_redirect"
+	redirectPermissionHint = "Cloudflare API token needs Zone > Single Redirect > Edit, or equivalent Dynamic URL Redirects Write access, to manage infra.http_redirect"
 )
 
 var nonRefChars = regexp.MustCompile(`[^a-z0-9]+`)
@@ -92,7 +95,7 @@ func (d *RedirectDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 	}
 	ruleset, err := d.client.GetRedirectRuleset(ctx, zone.ID)
 	if err != nil && !isCloudflareNotFound(err) {
-		return nil, fmt.Errorf("cloudflare redirect create %q: read redirect ruleset: %w", spec.Name, err)
+		return nil, fmt.Errorf("cloudflare redirect create %q: read redirect ruleset: %w", spec.Name, redirectPermissionError(err))
 	}
 	rule := parsed.rule()
 	if ruleset == nil || isCloudflareNotFound(err) {
@@ -101,7 +104,7 @@ func (d *RedirectDriver) Create(ctx context.Context, spec interfaces.ResourceSpe
 		ruleset, err = d.client.UpdateRedirectRuleset(ctx, zone.ID, ruleset.ID, upsertRedirectRule(ruleset.Rules, rule))
 	}
 	if err != nil {
-		return nil, fmt.Errorf("cloudflare redirect create %q: %w", spec.Name, err)
+		return nil, fmt.Errorf("cloudflare redirect create %q: %w", spec.Name, redirectPermissionError(err))
 	}
 	return redirectOutput(spec.Name, zone, ruleset, rule), nil
 }
@@ -122,7 +125,7 @@ func (d *RedirectDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (
 		if isCloudflareNotFound(err) {
 			return nil, fmt.Errorf("%w: cloudflare redirect read %q: %w", interfaces.ErrResourceNotFound, ref.Name, err)
 		}
-		return nil, fmt.Errorf("cloudflare redirect read %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cloudflare redirect read %q: %w", ref.Name, redirectPermissionError(err))
 	}
 	if refID == "" {
 		refID = redirectRefForHost(zone.Name)
@@ -147,12 +150,12 @@ func (d *RedirectDriver) Update(ctx context.Context, ref interfaces.ResourceRef,
 	}
 	ruleset, err := d.client.GetRedirectRuleset(ctx, zone.ID)
 	if err != nil {
-		return nil, fmt.Errorf("cloudflare redirect update %q: read redirect ruleset: %w", ref.Name, err)
+		return nil, fmt.Errorf("cloudflare redirect update %q: read redirect ruleset: %w", ref.Name, redirectPermissionError(err))
 	}
 	rule := parsed.rule()
 	ruleset, err = d.client.UpdateRedirectRuleset(ctx, zone.ID, ruleset.ID, upsertRedirectRule(ruleset.Rules, rule))
 	if err != nil {
-		return nil, fmt.Errorf("cloudflare redirect update %q: %w", ref.Name, err)
+		return nil, fmt.Errorf("cloudflare redirect update %q: %w", ref.Name, redirectPermissionError(err))
 	}
 	return redirectOutput(spec.Name, zone, ruleset, rule), nil
 }
@@ -167,7 +170,7 @@ func (d *RedirectDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 	}
 	ruleset, err := d.client.GetRedirectRuleset(ctx, zone.ID)
 	if err != nil {
-		return fmt.Errorf("cloudflare redirect delete %q: %w", ref.Name, err)
+		return fmt.Errorf("cloudflare redirect delete %q: %w", ref.Name, redirectPermissionError(err))
 	}
 	if refID == "" {
 		refID = redirectRefForHost(domain)
@@ -182,7 +185,10 @@ func (d *RedirectDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 		}
 	}
 	_, err = d.client.UpdateRedirectRuleset(ctx, zone.ID, ruleset.ID, filtered)
-	return err
+	if err != nil {
+		return redirectPermissionError(err)
+	}
+	return nil
 }
 
 func (d *RedirectDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, current *interfaces.ResourceOutput) (*interfaces.DiffResult, error) {
@@ -213,6 +219,25 @@ func (d *RedirectDriver) Scale(ctx context.Context, ref interfaces.ResourceRef, 
 func (d *RedirectDriver) Type() string { return redirectResourceType }
 
 func (d *RedirectDriver) SensitiveKeys() []string { return nil }
+
+func redirectPermissionError(err error) error {
+	if !isCloudflareAuthError(err) {
+		return err
+	}
+	return fmt.Errorf("%s: %w", redirectPermissionHint, err)
+}
+
+func isCloudflareAuthError(err error) bool {
+	var cfErr *cloudflare.Error
+	if errors.As(err, &cfErr) && (cfErr.StatusCode == http.StatusUnauthorized || cfErr.StatusCode == http.StatusForbidden) {
+		return true
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "403 forbidden") ||
+		strings.Contains(lower, "401 unauthorized") ||
+		strings.Contains(lower, `"code":10000`) ||
+		strings.Contains(lower, "authentication error")
+}
 
 func (d *RedirectDriver) ProviderIDFormat() interfaces.ProviderIDFormat {
 	return interfaces.IDFormatFreeform
