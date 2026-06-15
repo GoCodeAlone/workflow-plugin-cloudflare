@@ -10,8 +10,9 @@ import (
 )
 
 type fakeRedirectClient struct {
-	zone    *Zone
-	ruleset *RedirectRuleset
+	zone       *Zone
+	ruleset    *RedirectRuleset
+	rulesetErr error
 
 	created []*RedirectRuleset
 	updated []*RedirectRuleset
@@ -28,6 +29,9 @@ func (f *fakeRedirectClient) GetZone(_ context.Context, domain, zoneID string) (
 }
 
 func (f *fakeRedirectClient) GetRedirectRuleset(_ context.Context, zoneID string) (*RedirectRuleset, error) {
+	if f.rulesetErr != nil {
+		return nil, f.rulesetErr
+	}
 	if f.ruleset == nil {
 		return nil, interfaces.ErrResourceNotFound
 	}
@@ -155,6 +159,7 @@ func TestRedirectDriverDiffMatchesCurrentOutput(t *testing.T) {
 				"preserve_path":         true,
 				"preserve_query_string": true,
 				"enabled":               true,
+				"expression":            `(http.host eq "example.net")`,
 			},
 		},
 	)
@@ -163,6 +168,122 @@ func TestRedirectDriverDiffMatchesCurrentOutput(t *testing.T) {
 	}
 	if diff.NeedsUpdate {
 		t.Fatalf("diff = %#v, want no update", diff)
+	}
+}
+
+func TestRedirectDriverDiffDetectsExpressionDrift(t *testing.T) {
+	driver := NewRedirectDriverWithClient(&fakeRedirectClient{})
+	diff, err := driver.Diff(context.Background(),
+		interfaces.ResourceSpec{
+			Name: "redirect-example-net",
+			Type: redirectResourceType,
+			Config: map[string]any{
+				"domain":      "example.net",
+				"from_host":   "example.net",
+				"target_url":  "https://example.com",
+				"status_code": 301,
+			},
+		},
+		&interfaces.ResourceOutput{
+			Name:       "redirect-example-net",
+			Type:       redirectResourceType,
+			ProviderID: "zone/workflow_redirect_example_net",
+			Outputs: map[string]any{
+				"domain":                "example.net",
+				"from_host":             "example.net",
+				"target_url":            "https://example.com",
+				"status_code":           301,
+				"preserve_path":         true,
+				"preserve_query_string": true,
+				"enabled":               true,
+				"expression":            `(http.host eq "other.example.net")`,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatal("NeedsUpdate = false, want true")
+	}
+	found := false
+	for _, change := range diff.Changes {
+		if change.Path == "expression" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("changes = %#v, want expression drift", diff.Changes)
+	}
+}
+
+func TestRedirectDriverReadPreservesNonNotFoundRulesetError(t *testing.T) {
+	driver := NewRedirectDriverWithClient(&fakeRedirectClient{
+		zone:       &Zone{ID: "zone", Name: "example.net", Status: "active"},
+		rulesetErr: errors.New("api unavailable"),
+	})
+	_, err := driver.Read(context.Background(), interfaces.ResourceRef{
+		Name:       "example.net",
+		Type:       redirectResourceType,
+		ProviderID: "zone/workflow_redirect_example_net",
+	})
+	if err == nil {
+		t.Fatal("expected read error")
+	}
+	if errors.Is(err, interfaces.ErrResourceNotFound) {
+		t.Fatalf("transient ruleset read error was misclassified as not found: %v", err)
+	}
+}
+
+func TestRedirectDriverDeleteRequiresRuleRefWhenNameIsNotDomain(t *testing.T) {
+	driver := NewRedirectDriverWithClient(&fakeRedirectClient{
+		zone: &Zone{ID: "zone", Name: "example.net", Status: "active"},
+		ruleset: &RedirectRuleset{
+			ID:     "ruleset",
+			ZoneID: "zone",
+			Rules: []RedirectRule{{
+				Ref:       "workflow_redirect_example_net",
+				TargetURL: "https://example.com",
+			}},
+		},
+	})
+	err := driver.Delete(context.Background(), interfaces.ResourceRef{
+		Name:       "friendly_name",
+		Type:       redirectResourceType,
+		ProviderID: "zone",
+	})
+	if err == nil || !strings.Contains(err.Error(), "provider_id must include zone/ref") {
+		t.Fatalf("Delete error = %v, want provider_id rule-ref error", err)
+	}
+}
+
+func TestRedirectRuleParamOmitsEmptyID(t *testing.T) {
+	param := redirectRuleParam(RedirectRule{
+		Ref:                 "workflow_redirect_example_net",
+		Description:         "redirect",
+		Expression:          `(http.host eq "example.net")`,
+		TargetURL:           "https://example.com",
+		StatusCode:          301,
+		PreservePath:        true,
+		PreserveQueryString: true,
+		Enabled:             true,
+	})
+	if param.ID.Present {
+		t.Fatalf("ID param is valid for empty rule ID; want omitted optional field")
+	}
+	param = redirectRuleParam(RedirectRule{
+		ID:                  "rule-id",
+		Ref:                 "workflow_redirect_example_net",
+		Description:         "redirect",
+		Expression:          `(http.host eq "example.net")`,
+		TargetURL:           "https://example.com",
+		StatusCode:          301,
+		PreservePath:        true,
+		PreserveQueryString: true,
+		Enabled:             true,
+	})
+	if !param.ID.Present {
+		t.Fatal("ID param is not valid for non-empty rule ID")
 	}
 }
 

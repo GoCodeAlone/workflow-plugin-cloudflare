@@ -119,7 +119,10 @@ func (d *RedirectDriver) Read(ctx context.Context, ref interfaces.ResourceRef) (
 	}
 	ruleset, err := d.client.GetRedirectRuleset(ctx, zone.ID)
 	if err != nil {
-		return nil, fmt.Errorf("%w: cloudflare redirect read %q: %w", interfaces.ErrResourceNotFound, ref.Name, err)
+		if isCloudflareNotFound(err) {
+			return nil, fmt.Errorf("%w: cloudflare redirect read %q: %w", interfaces.ErrResourceNotFound, ref.Name, err)
+		}
+		return nil, fmt.Errorf("cloudflare redirect read %q: %w", ref.Name, err)
 	}
 	if refID == "" {
 		refID = redirectRefForHost(zone.Name)
@@ -168,6 +171,9 @@ func (d *RedirectDriver) Delete(ctx context.Context, ref interfaces.ResourceRef)
 	}
 	if refID == "" {
 		refID = redirectRefForHost(domain)
+	}
+	if refID == "" || refID == redirectRefForHost("") {
+		return fmt.Errorf("cloudflare redirect delete %q: provider_id must include zone/ref when resource name is not a domain", ref.Name)
 	}
 	filtered := ruleset.Rules[:0]
 	for _, rule := range ruleset.Rules {
@@ -392,7 +398,7 @@ func hostFromRedirectExpression(expression, fallback string) string {
 }
 
 func diffRedirectOutput(current, desired map[string]any) []interfaces.FieldChange {
-	paths := []string{"domain", "from_host", "target_url", "status_code", "preserve_path", "preserve_query_string", "enabled"}
+	paths := []string{"domain", "from_host", "target_url", "status_code", "preserve_path", "preserve_query_string", "enabled", "expression"}
 	var changes []interfaces.FieldChange
 	for _, path := range paths {
 		if fmt.Sprint(current[path]) != fmt.Sprint(desired[path]) {
@@ -557,8 +563,7 @@ func redirectRuleParam(rule RedirectRule) rulesets.RedirectRuleParam {
 	} else {
 		targetURL.Value = cloudflare.String(rule.TargetURL)
 	}
-	return rulesets.RedirectRuleParam{
-		ID:          cloudflare.String(rule.ID),
+	param := rulesets.RedirectRuleParam{
 		Ref:         cloudflare.String(rule.Ref),
 		Description: cloudflare.String(rule.Description),
 		Expression:  cloudflare.String(rule.Expression),
@@ -572,6 +577,10 @@ func redirectRuleParam(rule RedirectRule) rulesets.RedirectRuleParam {
 			}),
 		}),
 	}
+	if rule.ID != "" {
+		param.ID = cloudflare.String(rule.ID)
+	}
+	return param
 }
 
 func redirectTargetExpression(targetURL string) string {

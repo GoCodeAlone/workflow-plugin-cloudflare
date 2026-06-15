@@ -687,6 +687,7 @@ func importedAppliedConfig(resourceType string, outputs map[string]any) map[stri
 		copyIfPresent(cfg, outputs, "from_host")
 		copyIfPresent(cfg, outputs, "target_url")
 		copyIfPresent(cfg, outputs, "status_code")
+		copyIfPresent(cfg, outputs, "preserve_path")
 		copyIfPresent(cfg, outputs, "preserve_query_string")
 		copyIfPresent(cfg, outputs, "enabled")
 		copyIfPresent(cfg, outputs, "ref")

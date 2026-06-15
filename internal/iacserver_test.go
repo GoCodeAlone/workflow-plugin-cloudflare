@@ -216,6 +216,28 @@ func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
 	}
 }
 
+func TestCfIaCServer_ImportRedirectPreservesPathConfig(t *testing.T) {
+	srv := &cfIaCServer{
+		dnsDriver:      drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver:   drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		redirectDriver: drivers.NewRedirectDriverWithClient(&serverFakeRedirectClient{}),
+	}
+	resp, err := srv.Import(context.Background(), &pb.ImportRequest{ProviderId: "zone/workflow_redirect_example_com", ResourceType: "infra.http_redirect"})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	var applied map[string]any
+	if err := json.Unmarshal(resp.GetState().GetAppliedConfigJson(), &applied); err != nil {
+		t.Fatalf("unmarshal applied config: %v", err)
+	}
+	if applied["preserve_path"] != false {
+		t.Fatalf("preserve_path = %#v, want explicit false", applied["preserve_path"])
+	}
+	if applied["preserve_query_string"] != true {
+		t.Fatalf("preserve_query_string = %#v, want true", applied["preserve_query_string"])
+	}
+}
+
 func TestCfProvider_ImportBuildsAdoptionConfig(t *testing.T) {
 	provider := &cfProvider{
 		dnsDriver:      drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
@@ -271,6 +293,7 @@ func (serverFakeRedirectClient) GetRedirectRuleset(_ context.Context, zoneID str
 			Expression:          `(http.host eq "example.com")`,
 			TargetURL:           "https://example.org",
 			StatusCode:          301,
+			PreservePath:        false,
 			PreserveQueryString: true,
 			Enabled:             true,
 		}},
