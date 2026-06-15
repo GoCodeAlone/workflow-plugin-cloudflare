@@ -18,7 +18,7 @@ func TestEmbeddedPluginManifestMatchesRoot(t *testing.T) {
 
 func TestManifestDeclaresIaCProviderCapability(t *testing.T) {
 	manifest := readPluginManifest(t, "plugin.json")
-	assertIaCProviderCapability(t, manifest, "cloudflare", []string{"infra.dns", "infra.domain"})
+	assertIaCProviderCapability(t, manifest, "cloudflare", []string{"infra.dns", "infra.domain", "infra.http_redirect"})
 }
 
 type pluginManifest struct {

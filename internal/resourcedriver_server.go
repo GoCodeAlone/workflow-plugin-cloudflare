@@ -14,7 +14,7 @@ func (s *cfIaCServer) resolveResourceDriver(resourceType string) (interfaces.Res
 	if resourceType == "" {
 		return nil, status.Error(codes.InvalidArgument, "cloudflare ResourceDriver: resource_type is required")
 	}
-	if s.dnsDriver == nil || s.domainDriver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil || s.redirectDriver == nil {
 		return nil, status.Error(codes.FailedPrecondition, "cloudflare ResourceDriver: Initialize must be called before resource driver RPCs")
 	}
 	driver, err := s.resourceDriver(resourceType)

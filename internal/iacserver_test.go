@@ -65,7 +65,10 @@ func TestCfIaCServer_NameVersionCapabilities(t *testing.T) {
 	if caps.GetComputePlanVersion() != "v2" {
 		t.Fatalf("ComputePlanVersion = %q, want v2", caps.GetComputePlanVersion())
 	}
-	if len(caps.GetCapabilities()) != 2 || caps.GetCapabilities()[0].GetResourceType() != "infra.dns" || caps.GetCapabilities()[1].GetResourceType() != "infra.domain" {
+	if len(caps.GetCapabilities()) != 3 ||
+		caps.GetCapabilities()[0].GetResourceType() != "infra.dns" ||
+		caps.GetCapabilities()[1].GetResourceType() != "infra.domain" ||
+		caps.GetCapabilities()[2].GetResourceType() != "infra.http_redirect" {
 		t.Fatalf("capabilities = %#v", caps.GetCapabilities())
 	}
 }
@@ -140,8 +143,9 @@ func TestCfIaCServer_PlanBeforeInitialize(t *testing.T) {
 
 func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
 	srv := &cfIaCServer{
-		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
-		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		dnsDriver:      drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver:   drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		redirectDriver: drivers.NewRedirectDriverWithClient(&serverFakeRedirectClient{}),
 	}
 	resp, err := srv.Import(context.Background(), &pb.ImportRequest{ProviderId: "zone", ResourceType: "infra.dns"})
 	if err != nil {
@@ -179,8 +183,9 @@ func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
 
 func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
 	srv := &cfIaCServer{
-		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
-		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		dnsDriver:      drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver:   drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		redirectDriver: drivers.NewRedirectDriverWithClient(&serverFakeRedirectClient{}),
 	}
 	resp, err := srv.Import(context.Background(), &pb.ImportRequest{ProviderId: "example.com", ResourceType: "infra.domain"})
 	if err != nil {
@@ -213,8 +218,9 @@ func TestCfIaCServer_ImportDomainUsesRegistrarDriver(t *testing.T) {
 
 func TestCfProvider_ImportBuildsAdoptionConfig(t *testing.T) {
 	provider := &cfProvider{
-		dnsDriver:    drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
-		domainDriver: drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		dnsDriver:      drivers.NewDNSDriverWithClient(&serverFakeCFClient{}),
+		domainDriver:   drivers.NewDomainDriverWithClient("acct", &serverFakeRegistrarClient{}),
+		redirectDriver: drivers.NewRedirectDriverWithClient(&serverFakeRedirectClient{}),
 	}
 	state, err := provider.Import(context.Background(), "zone", "infra.dns")
 	if err != nil {
@@ -249,6 +255,32 @@ func (serverFakeCFClient) UpdateRecord(_ context.Context, _, _ string, _ drivers
 func (serverFakeCFClient) DeleteRecord(_ context.Context, _, _ string) error { return nil }
 func (serverFakeCFClient) GetDNSSEC(_ context.Context, _ string) (*drivers.DNSSEC, error) {
 	return nil, nil
+}
+
+type serverFakeRedirectClient struct{}
+
+func (serverFakeRedirectClient) GetZone(_ context.Context, _, _ string) (*drivers.Zone, error) {
+	return &drivers.Zone{ID: "zone", Name: "example.com", Status: "active"}, nil
+}
+func (serverFakeRedirectClient) GetRedirectRuleset(_ context.Context, zoneID string) (*drivers.RedirectRuleset, error) {
+	return &drivers.RedirectRuleset{
+		ID:     "ruleset",
+		ZoneID: zoneID,
+		Rules: []drivers.RedirectRule{{
+			Ref:                 "workflow_redirect_example_com",
+			Expression:          `(http.host eq "example.com")`,
+			TargetURL:           "https://example.org",
+			StatusCode:          301,
+			PreserveQueryString: true,
+			Enabled:             true,
+		}},
+	}, nil
+}
+func (serverFakeRedirectClient) CreateRedirectRuleset(_ context.Context, zoneID string, rules []drivers.RedirectRule) (*drivers.RedirectRuleset, error) {
+	return &drivers.RedirectRuleset{ID: "ruleset", ZoneID: zoneID, Rules: rules}, nil
+}
+func (serverFakeRedirectClient) UpdateRedirectRuleset(_ context.Context, zoneID, rulesetID string, rules []drivers.RedirectRule) (*drivers.RedirectRuleset, error) {
+	return &drivers.RedirectRuleset{ID: rulesetID, ZoneID: zoneID, Rules: rules}, nil
 }
 
 type serverFakeRegistrarClient struct{}

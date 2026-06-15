@@ -31,9 +31,10 @@ type cfIaCServer struct {
 	pb.UnimplementedIaCProviderEnumeratorServer
 	pb.UnimplementedResourceDriverServer
 
-	cfg          Config
-	dnsDriver    *drivers.DNSDriver
-	domainDriver *drivers.DomainDriver
+	cfg            Config
+	dnsDriver      *drivers.DNSDriver
+	domainDriver   *drivers.DomainDriver
+	redirectDriver *drivers.RedirectDriver
 	// zones is the account-level zone lister used by EnumerateAll. Constructed
 	// in Initialize from the validated cloudflare-go SDK client.
 	zones zoneListerCF
@@ -71,6 +72,11 @@ func (s *cfIaCServer) Capabilities(_ context.Context, _ *pb.CapabilitiesRequest)
 				Tier:         1,
 				Operations:   []string{"read", "update"},
 			},
+			{
+				ResourceType: "infra.http_redirect",
+				Tier:         1,
+				Operations:   []string{"create", "read", "update", "delete"},
+			},
 		},
 		ComputePlanVersion: "v2",
 	}, nil
@@ -91,6 +97,7 @@ func (s *cfIaCServer) Initialize(_ context.Context, req *pb.InitializeRequest) (
 	s.cfg = cfg
 	s.dnsDriver = drivers.NewDNSDriverWithAccountRequestTimeout(cfg.APIToken, cfg.AccountID, cfg.RequestTimeout)
 	s.domainDriver = drivers.NewDomainDriver(cfg.APIToken, cfg.AccountID)
+	s.redirectDriver = drivers.NewRedirectDriverWithAccountRequestTimeout(cfg.APIToken, cfg.AccountID, cfg.RequestTimeout)
 	s.zones = newRealZoneLister(cfg.APIToken, cfg.RequestTimeout)
 	return &pb.InitializeResponse{}, nil
 }
@@ -107,7 +114,7 @@ func newRealZoneLister(apiToken string, requestTimeout time.Duration) zoneLister
 }
 
 func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanResponse, error) {
-	if s.dnsDriver == nil || s.domainDriver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil || s.redirectDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Plan called before Initialize")
 	}
 	desired, err := specsFromPB(req.GetDesired())
@@ -118,7 +125,7 @@ func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanRe
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare iacserver: decode Plan current: %w", err)
 	}
-	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, zones: s.zones}
+	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, redirectDriver: s.redirectDriver, zones: s.zones}
 	plan, err := platform.ComputePlan(ctx, p, desired, current)
 	if err != nil {
 		return nil, err
@@ -131,7 +138,7 @@ func (s *cfIaCServer) Plan(ctx context.Context, req *pb.PlanRequest) (*pb.PlanRe
 }
 
 func (s *cfIaCServer) Destroy(ctx context.Context, req *pb.DestroyRequest) (*pb.DestroyResponse, error) {
-	if s.dnsDriver == nil || s.domainDriver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil || s.redirectDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Destroy called before Initialize")
 	}
 	refs := refsFromPB(req.GetRefs())
@@ -152,7 +159,7 @@ func (s *cfIaCServer) Destroy(ctx context.Context, req *pb.DestroyRequest) (*pb.
 }
 
 func (s *cfIaCServer) Status(ctx context.Context, req *pb.StatusRequest) (*pb.StatusResponse, error) {
-	if s.dnsDriver == nil || s.domainDriver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil || s.redirectDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Status called before Initialize")
 	}
 	refs := refsFromPB(req.GetRefs())
@@ -185,7 +192,7 @@ func (s *cfIaCServer) Status(ctx context.Context, req *pb.StatusRequest) (*pb.St
 }
 
 func (s *cfIaCServer) Import(ctx context.Context, req *pb.ImportRequest) (*pb.ImportResponse, error) {
-	if s.dnsDriver == nil || s.domainDriver == nil {
+	if s.dnsDriver == nil || s.domainDriver == nil || s.redirectDriver == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: Import called before Initialize")
 	}
 	resourceType := req.GetResourceType()
@@ -235,6 +242,8 @@ func (s *cfIaCServer) resourceDriver(resourceType string) (interfaces.ResourceDr
 		return s.dnsDriver, nil
 	case "infra.domain":
 		return s.domainDriver, nil
+	case "infra.http_redirect":
+		return s.redirectDriver, nil
 	default:
 		return nil, fmt.Errorf("cloudflare: unsupported resource type %q", resourceType)
 	}
@@ -260,7 +269,7 @@ func (s *cfIaCServer) EnumerateAll(ctx context.Context, req *pb.EnumerateAllRequ
 	if s.zones == nil {
 		return nil, fmt.Errorf("cloudflare iacserver: EnumerateAll called before Initialize")
 	}
-	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, zones: s.zones}
+	p := &cfProvider{dnsDriver: s.dnsDriver, domainDriver: s.domainDriver, redirectDriver: s.redirectDriver, zones: s.zones}
 	outs, err := p.EnumerateAll(ctx, req.GetResourceType())
 	if err != nil {
 		return nil, err
@@ -320,8 +329,9 @@ func (l *cfRealZoneLister) ListZones(ctx context.Context, q zones.ZoneListParams
 }
 
 type cfProvider struct {
-	dnsDriver    *drivers.DNSDriver
-	domainDriver *drivers.DomainDriver
+	dnsDriver      *drivers.DNSDriver
+	domainDriver   *drivers.DomainDriver
+	redirectDriver *drivers.RedirectDriver
 	// zones is the injected account-level zone lister used by EnumerateAll
 	// for resource type "infra.dns". May be nil for code paths that don't
 	// touch enumeration (e.g. legacy Plan/Apply paths in tests).
@@ -337,6 +347,7 @@ func (p *cfProvider) Capabilities() []interfaces.IaCCapabilityDeclaration {
 	return []interfaces.IaCCapabilityDeclaration{
 		{ResourceType: "infra.dns", Tier: 1, Operations: []string{"create", "read", "update", "delete"}},
 		{ResourceType: "infra.domain", Tier: 1, Operations: []string{"read", "update"}},
+		{ResourceType: "infra.http_redirect", Tier: 1, Operations: []string{"create", "read", "update", "delete"}},
 	}
 }
 func (p *cfProvider) ResourceDriver(resourceType string) (interfaces.ResourceDriver, error) {
@@ -345,6 +356,8 @@ func (p *cfProvider) ResourceDriver(resourceType string) (interfaces.ResourceDri
 		return p.dnsDriver, nil
 	case "infra.domain":
 		return p.domainDriver, nil
+	case "infra.http_redirect":
+		return p.redirectDriver, nil
 	default:
 		return nil, fmt.Errorf("cloudflare: unsupported resource type %q", resourceType)
 	}
@@ -668,6 +681,15 @@ func importedAppliedConfig(resourceType string, outputs map[string]any) map[stri
 	case "infra.domain":
 		copyIfPresent(cfg, outputs, "domain")
 		copyIfPresent(cfg, outputs, "account_id")
+	case "infra.http_redirect":
+		copyIfPresent(cfg, outputs, "domain")
+		copyIfPresent(cfg, outputs, "zone_id")
+		copyIfPresent(cfg, outputs, "from_host")
+		copyIfPresent(cfg, outputs, "target_url")
+		copyIfPresent(cfg, outputs, "status_code")
+		copyIfPresent(cfg, outputs, "preserve_query_string")
+		copyIfPresent(cfg, outputs, "enabled")
+		copyIfPresent(cfg, outputs, "ref")
 	default:
 		copyIfPresent(cfg, outputs, "domain")
 		copyIfPresent(cfg, outputs, "zone_id")

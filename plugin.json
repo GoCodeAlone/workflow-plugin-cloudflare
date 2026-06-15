@@ -1,7 +1,7 @@
 {
   "name": "workflow-plugin-cloudflare",
   "version": "0.1.6",
-  "description": "Cloudflare DNS and Registrar provider for workflow IaC (infra.dns, infra.domain)",
+  "description": "Cloudflare DNS, redirect, and Registrar provider for workflow IaC (infra.dns, infra.http_redirect, infra.domain)",
   "author": "GoCodeAlone",
   "license": "MIT",
   "type": "external",
@@ -24,13 +24,15 @@
     "triggerTypes": [],
     "resourceTypes": [
       "infra.dns",
-      "infra.domain"
+      "infra.domain",
+      "infra.http_redirect"
     ],
     "iacProvider": {
       "name": "cloudflare",
       "resourceTypes": [
         "infra.dns",
-        "infra.domain"
+        "infra.domain",
+        "infra.http_redirect"
       ]
     }
   },
@@ -41,7 +43,7 @@
     {
       "name": "CLOUDFLARE_API_TOKEN",
       "sensitive": true,
-      "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; registrar import/status also requires Registrar read access and auto-renew updates require Registrar edit access.",
+      "description": "Cloudflare API token with Zone:Read and DNS:Edit for managed zones; redirect rules require Dynamic URL Redirects Write; registrar import/status also requires Registrar read access and auto-renew updates require Registrar edit access.",
       "prompt": "Cloudflare API token"
     }
   ],
