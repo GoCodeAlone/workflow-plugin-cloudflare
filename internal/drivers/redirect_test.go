@@ -13,6 +13,7 @@ type fakeRedirectClient struct {
 	zone       *Zone
 	ruleset    *RedirectRuleset
 	rulesetErr error
+	updateErr  error
 
 	created []*RedirectRuleset
 	updated []*RedirectRuleset
@@ -49,6 +50,9 @@ func (f *fakeRedirectClient) CreateRedirectRuleset(_ context.Context, zoneID str
 }
 
 func (f *fakeRedirectClient) UpdateRedirectRuleset(_ context.Context, zoneID, rulesetID string, rules []RedirectRule) (*RedirectRuleset, error) {
+	if f.updateErr != nil {
+		return nil, f.updateErr
+	}
 	out := &RedirectRuleset{ID: rulesetID, ZoneID: zoneID, Name: redirectRulesetName, Rules: append([]RedirectRule(nil), rules...)}
 	f.ruleset = out
 	f.updated = append(f.updated, out)
@@ -232,6 +236,63 @@ func TestRedirectDriverReadPreservesNonNotFoundRulesetError(t *testing.T) {
 	}
 	if errors.Is(err, interfaces.ErrResourceNotFound) {
 		t.Fatalf("transient ruleset read error was misclassified as not found: %v", err)
+	}
+}
+
+func TestRedirectDriverCreateExplainsRedirectPermissionError(t *testing.T) {
+	driver := NewRedirectDriverWithClient(&fakeRedirectClient{
+		zone:       &Zone{ID: "zone", Name: "example.net", Status: "active"},
+		rulesetErr: errors.New(`GET "https://api.cloudflare.com/client/v4/zones/zone/rulesets/phases/http_request_dynamic_redirect/entrypoint": 403 Forbidden {"success":false,"errors":[{"code":10000,"message":"Authentication error"}]}`),
+	})
+
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "redirect-example-net",
+		Type: redirectResourceType,
+		Config: map[string]any{
+			"domain":     "example.net",
+			"target_url": "https://example.com",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected create error")
+	}
+	if !strings.Contains(err.Error(), "Zone > Single Redirect > Edit") {
+		t.Fatalf("Create error = %v, want Cloudflare redirect permission hint", err)
+	}
+	if !strings.Contains(err.Error(), "Authentication error") {
+		t.Fatalf("Create error = %v, want original API error context", err)
+	}
+}
+
+func TestRedirectDriverUpdateExplainsRedirectPermissionError(t *testing.T) {
+	driver := NewRedirectDriverWithClient(&fakeRedirectClient{
+		zone: &Zone{ID: "zone", Name: "example.net", Status: "active"},
+		ruleset: &RedirectRuleset{
+			ID: "ruleset",
+			Rules: []RedirectRule{{
+				Ref:       "workflow_redirect_example_net",
+				TargetURL: "https://old.example.com",
+			}},
+		},
+		updateErr: errors.New("403 Forbidden: missing Dynamic URL Redirects Write"),
+	})
+
+	_, err := driver.Update(context.Background(),
+		interfaces.ResourceRef{Name: "redirect-example-net", Type: redirectResourceType, ProviderID: "zone/workflow_redirect_example_net"},
+		interfaces.ResourceSpec{
+			Name: "redirect-example-net",
+			Type: redirectResourceType,
+			Config: map[string]any{
+				"domain":     "example.net",
+				"target_url": "https://example.com",
+			},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected update error")
+	}
+	if !strings.Contains(err.Error(), "Dynamic URL Redirects Write") {
+		t.Fatalf("Update error = %v, want Cloudflare redirect permission hint", err)
 	}
 }
 
