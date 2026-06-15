@@ -1,7 +1,7 @@
 # workflow-plugin-cloudflare
 
-Cloudflare DNS and Registrar provider for the GoCodeAlone/workflow IaC surface.
-Implements `infra.dns` and `infra.domain` using the official
+Cloudflare DNS, redirect, and Registrar provider for the GoCodeAlone/workflow IaC surface.
+Implements `infra.dns`, `infra.http_redirect`, and `infra.domain` using the official
 [`cloudflare-go/v7`](https://github.com/cloudflare/cloudflare-go) SDK.
 `infra.domain` is import-first and covers Cloudflare Registrar metadata plus
 guarded auto-renew management.
@@ -37,6 +37,40 @@ resources:
         - { type: CNAME, name: www, data: example.com, ttl: 300, proxied: true }
         - { type: MX, name: "@", data: aspmx.l.google.com, ttl: 300, priority: 1 }
         - { type: TXT, name: "@", data: "v=spf1 include:_spf.google.com ~all", ttl: 300 }
+```
+
+## HTTP Redirects
+
+`infra.http_redirect` manages one Cloudflare Single Redirect rule in a zone's
+`http_request_dynamic_redirect` entrypoint ruleset. It preserves unrelated
+rules in the same ruleset and uses a stable rule `ref` so updates do not create
+duplicate rules.
+
+Cloudflare only evaluates redirect rules for hostnames proxied through
+Cloudflare. Redirect-only domains should also declare an originless proxied DNS
+record, such as an `A` record for `@` pointing at `192.0.2.1`.
+
+```yaml
+resources:
+  - name: example-net
+    type: infra.dns
+    config:
+      provider: cloudflare
+      domain: example.net
+      manage_unlisted: true
+      records:
+        - { type: A, name: "@", data: 192.0.2.1, ttl: 1, proxied: true }
+
+  - name: example-net-redirect
+    type: infra.http_redirect
+    config:
+      provider: cloudflare
+      domain: example.net
+      from_host: example.net
+      target_url: https://example.com
+      status_code: 301
+      preserve_path: true
+      preserve_query_string: true
 ```
 
 ## Registrar Domains
@@ -96,7 +130,8 @@ wfctl vars setup --plugin workflow-plugin-cloudflare
 
 For existing-zone import and DNS management, use a token with Zone:Read and
 DNS:Edit scoped to the relevant zones. Creating a missing zone also requires
-permission to create zones in the target account. Registrar import/status needs
+permission to create zones in the target account. `infra.http_redirect` requires
+Dynamic URL Redirects Write for the target zone. Registrar import/status needs
 Registrar read access; changing `auto_renew` needs Registrar edit access.
 
 ## Import
@@ -121,8 +156,9 @@ tests.
 The production implementation uses `github.com/cloudflare/cloudflare-go/v7`.
 Tests should use the driver constructors that accept narrow interfaces:
 `drivers.NewDNSDriverWithClient` for zone and record behavior, and
-`drivers.NewDomainDriverWithClient` for Cloudflare Registrar behavior. That
-keeps tests deterministic and avoids requiring live Cloudflare credentials.
+`drivers.NewDomainDriverWithClient` for Cloudflare Registrar behavior. Redirect
+tests use `drivers.NewRedirectDriverWithClient`. That keeps tests deterministic
+and avoids requiring live Cloudflare credentials.
 
 `infra.dns` can read or update existing zones by provider ID. Creating a missing
 zone requires `account_id` because Cloudflare zone creation is account-scoped.
