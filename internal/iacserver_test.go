@@ -176,8 +176,8 @@ func TestCfIaCServer_ImportUsesDriverOutput(t *testing.T) {
 		t.Fatalf("applied records = %#v, want one record", applied["records"])
 	}
 	record, ok := records[0].(map[string]any)
-	if !ok || record["id"] != nil || record["type"] != "TXT" || record["data"] != "imported" {
-		t.Fatalf("applied record = %#v, want IaC-safe TXT record without provider id", records[0])
+	if !ok || record["id"] != nil || record["type"] != "TXT" || record["data"] != `"imported"` {
+		t.Fatalf("applied record = %#v, want IaC-safe quoted TXT record without provider id", records[0])
 	}
 }
 

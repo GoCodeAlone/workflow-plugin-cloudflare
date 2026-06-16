@@ -36,8 +36,12 @@ resources:
         - { type: A, name: "@", data: 203.0.113.10, ttl: 300, proxied: true }
         - { type: CNAME, name: www, data: example.com, ttl: 300, proxied: true }
         - { type: MX, name: "@", data: aspmx.l.google.com, ttl: 300, priority: 1 }
-        - { type: TXT, name: "@", data: "v=spf1 include:_spf.google.com ~all", ttl: 300 }
+        - { type: TXT, name: "@", data: '"v=spf1 include:_spf.google.com ~all"', ttl: 300 }
 ```
+
+TXT `data` values are normalized to Cloudflare's quoted presentation form on
+create, update, read, and import. Existing unquoted config remains accepted, and
+already-quoted TXT values are not double wrapped.
 
 ## HTTP Redirects
 
