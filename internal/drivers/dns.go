@@ -378,6 +378,11 @@ func parseDNSSpec(spec interfaces.ResourceSpec, requireRecords bool, defaultAcco
 		}
 		parsed.Records = append(parsed.Records, record)
 	}
+	records, err := dedupeDesiredRecords(parsed.Records, domain)
+	if err != nil {
+		return dnsSpec{}, err
+	}
+	parsed.Records = records
 	return parsed, nil
 }
 
@@ -533,6 +538,24 @@ func recordsByKey(records []Record, domain string) map[string][]Record {
 		out[key] = append(out[key], record)
 	}
 	return out
+}
+
+func dedupeDesiredRecords(records []Record, domain string) ([]Record, error) {
+	out := make([]Record, 0, len(records))
+	seen := make(map[string]Record, len(records))
+	for _, record := range records {
+		key := recordKey(record, domain)
+		existing, ok := seen[key]
+		if !ok {
+			seen[key] = record
+			out = append(out, record)
+			continue
+		}
+		if !recordMatches(existing, record, domain) {
+			return nil, fmt.Errorf("records contain conflicting duplicate %s record %q", record.Type, record.Name)
+		}
+	}
+	return out, nil
 }
 
 func diffRecords(current, desired []Record, manageUnlisted bool, domain string) []interfaces.FieldChange {
