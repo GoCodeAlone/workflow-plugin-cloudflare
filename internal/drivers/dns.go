@@ -591,11 +591,13 @@ func recordMatches(current, desired Record, domain string) bool {
 		canonicalName(current.Name, domain) != canonicalName(desired.Name, domain) ||
 		canonicalData(current.Type, current.Data) != canonicalData(desired.Type, desired.Data) ||
 		current.TTL != desired.TTL ||
-		current.Priority != desired.Priority ||
-		current.Comment != desired.Comment {
+		current.Priority != desired.Priority {
 		return false
 	}
 	if desired.Proxied != nil && boolPtrValue(current.Proxied) != *desired.Proxied {
+		return false
+	}
+	if desired.Comment != "" && current.Comment != desired.Comment {
 		return false
 	}
 	return true

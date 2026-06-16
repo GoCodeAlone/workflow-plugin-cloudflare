@@ -410,6 +410,98 @@ func TestDNSDriver_DiffDoesNotManageProxiedWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_DiffDoesNotManageComputedRecordFieldsWhenOmitted(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"id": "placeholder", "type": "A", "name": "example.com", "data": "192.0.2.1", "ttl": 1,
+				"comment": "Originless placeholder for Cloudflare redirect rules", "proxiable": true, "proxied": true,
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "192.0.2.1", "ttl": 1},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want no update when computed fields are omitted", diff)
+	}
+}
+
+func TestDNSDriver_DiffManagesExplicitNonEmptyComment(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "A", "name": "example.com", "data": "192.0.2.1", "ttl": 1,
+				"comment": "provider comment",
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "192.0.2.1", "ttl": 1, "comment": "managed comment"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want update when explicit non-empty comment differs", diff)
+	}
+}
+
+func TestDNSDriver_UpdatePreservesComputedRecordFieldsWhenOmitted(t *testing.T) {
+	proxied := true
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{{
+			ID: "placeholder", Type: "A", Name: "example.com", Data: "192.0.2.1", TTL: 1,
+			Comment: "Originless placeholder for Cloudflare redirect rules", Proxiable: true, Proxied: &proxied,
+		}},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "192.0.2.1", "ttl": 1},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.updatedRecords) != 0 {
+		t.Fatalf("updatedRecords = %#v, want no update when computed fields are omitted", fake.updatedRecords)
+	}
+}
+
 func TestDNSDriver_DiffNormalizesRelativeRecordNames(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{
