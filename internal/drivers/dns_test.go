@@ -586,6 +586,70 @@ func TestDNSDriver_DiffNormalizesTXTQuotePresentation(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_DiffDetectsStaleWorkflowManagedMarkersWhenUnlistedRecordsArePreserved(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "gigbagg.rocks",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "gigbagg.rocks",
+			"records": []map[string]any{
+				{
+					"type":  "TXT",
+					"name":  "_workflow-dns-managed.gigbagg.rocks",
+					"data":  `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":   300,
+					"value": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+				},
+				{
+					"type":  "TXT",
+					"name":  "_workflow-dns-managed.gigbagg.rocks",
+					"data":  `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks"`,
+					"ttl":   300,
+					"value": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks"`,
+				},
+				{"type": "TXT", "name": "gigbagg.rocks", "data": "external", "ttl": 300, "value": "external"},
+			},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "gigbagg.rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("diff.NeedsUpdate = false, want true for stale workflow marker")
+	}
+	if len(diff.Changes) != 1 {
+		t.Fatalf("changes len = %d, want 1: %#v", len(diff.Changes), diff.Changes)
+	}
+	old, ok := diff.Changes[0].Old.(map[string]any)
+	if !ok {
+		t.Fatalf("change old = %#v, want record output", diff.Changes[0].Old)
+	}
+	if got, want := old["data"], `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks"`; got != want {
+		t.Fatalf("deleted marker data = %q, want %q", got, want)
+	}
+	if diff.Changes[0].New != nil {
+		t.Fatalf("change new = %#v, want nil delete", diff.Changes[0].New)
+	}
+}
+
 func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
 	fake := &fakeCFClient{
 		zone: &Zone{ID: "zone", Name: "example.com"},

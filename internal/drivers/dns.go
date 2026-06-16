@@ -579,9 +579,13 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 	var changes []interfaces.FieldChange
 	currentByKey := recordsByKey(current, domain)
 	desiredKeys := map[string]struct{}{}
+	hasDesiredWorkflowMarker := false
 	for _, record := range desired {
 		key := recordKey(record, domain)
 		desiredKeys[key] = struct{}{}
+		if isWorkflowManagedMarker(record, domain) {
+			hasDesiredWorkflowMarker = true
+		}
 		candidates := currentByKey[key]
 		if len(candidates) == 0 {
 			changes = append(changes, interfaces.FieldChange{Path: "records", Old: nil, New: recordOutput(record)})
@@ -595,6 +599,16 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 	}
 	if manageUnlisted {
 		for _, record := range current {
+			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
+				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
+			}
+		}
+	}
+	if !manageUnlisted && hasDesiredWorkflowMarker {
+		for _, record := range current {
+			if !isWorkflowManagedMarker(record, domain) {
+				continue
+			}
 			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
 				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
 			}
