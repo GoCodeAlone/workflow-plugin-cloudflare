@@ -145,7 +145,7 @@ func (d *DNSDriver) Create(ctx context.Context, spec interfaces.ResourceSpec) (*
 	if err != nil {
 		return nil, fmt.Errorf("cloudflare dns create %q: %w", spec.Name, err)
 	}
-	if err := d.applyRecords(ctx, zone.ID, parsed.Records, parsed.ManageUnlisted); err != nil {
+	if err := d.applyRecords(ctx, zone.ID, zone.Name, parsed.Records, parsed.ManageUnlisted); err != nil {
 		return nil, fmt.Errorf("cloudflare dns create %q: %w", spec.Name, err)
 	}
 	return d.readOutput(ctx, spec.Name, zone)
@@ -179,7 +179,7 @@ func (d *DNSDriver) Update(ctx context.Context, ref interfaces.ResourceRef, spec
 	if !strings.EqualFold(parsed.Domain, zone.Name) {
 		return nil, fmt.Errorf("cloudflare dns update %q: cannot change domain from %q to %q", ref.Name, zone.Name, parsed.Domain)
 	}
-	if err := d.applyRecords(ctx, zone.ID, parsed.Records, parsed.ManageUnlisted); err != nil {
+	if err := d.applyRecords(ctx, zone.ID, zone.Name, parsed.Records, parsed.ManageUnlisted); err != nil {
 		return nil, fmt.Errorf("cloudflare dns update %q: %w", ref.Name, err)
 	}
 	return d.readOutput(ctx, ref.Name, zone)
@@ -227,7 +227,7 @@ func (d *DNSDriver) Diff(_ context.Context, desired interfaces.ResourceSpec, cur
 	if err != nil {
 		return nil, err
 	}
-	changes := diffRecords(currentRecords, parsed.Records, parsed.ManageUnlisted)
+	changes := diffRecords(currentRecords, parsed.Records, parsed.ManageUnlisted, parsed.Domain)
 	return &interfaces.DiffResult{NeedsUpdate: len(changes) > 0, Changes: changes}, nil
 }
 
@@ -297,15 +297,15 @@ func (d *DNSDriver) readOutput(ctx context.Context, name string, zone *Zone) (*i
 	return dnsOutput(name, zone, records, dnssec), nil
 }
 
-func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []Record, manageUnlisted bool) error {
+func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, desired []Record, manageUnlisted bool) error {
 	current, err := d.client.ListRecords(ctx, zoneID)
 	if err != nil {
 		return fmt.Errorf("list records for zone %q: %w", zoneID, err)
 	}
-	currentByKey := recordsByKey(current)
+	currentByKey := recordsByKey(current, zoneName)
 	desiredKeys := map[string]struct{}{}
 	for _, record := range desired {
-		key := recordKey(record)
+		key := recordKey(record, zoneName)
 		desiredKeys[key] = struct{}{}
 		existing := currentByKey[key]
 		if len(existing) == 0 {
@@ -315,7 +315,7 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []R
 			continue
 		}
 		currentByKey[key] = existing[1:]
-		if !recordMatches(existing[0], record) {
+		if !recordMatches(existing[0], record, zoneName) {
 			if _, err := d.client.UpdateRecord(ctx, zoneID, existing[0].ID, record); err != nil {
 				return fmt.Errorf("update %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 			}
@@ -325,7 +325,7 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID string, desired []R
 		return nil
 	}
 	for _, record := range current {
-		if _, ok := desiredKeys[recordKey(record)]; ok {
+		if _, ok := desiredKeys[recordKey(record, zoneName)]; ok {
 			continue
 		}
 		if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
@@ -526,21 +526,21 @@ func normalizeRecordName(name, domain string) string {
 	return trimmed + "." + domain
 }
 
-func recordsByKey(records []Record) map[string][]Record {
+func recordsByKey(records []Record, domain string) map[string][]Record {
 	out := make(map[string][]Record)
 	for _, record := range records {
-		key := recordKey(record)
+		key := recordKey(record, domain)
 		out[key] = append(out[key], record)
 	}
 	return out
 }
 
-func diffRecords(current, desired []Record, manageUnlisted bool) []interfaces.FieldChange {
+func diffRecords(current, desired []Record, manageUnlisted bool, domain string) []interfaces.FieldChange {
 	var changes []interfaces.FieldChange
-	currentByKey := recordsByKey(current)
+	currentByKey := recordsByKey(current, domain)
 	desiredKeys := map[string]struct{}{}
 	for _, record := range desired {
-		key := recordKey(record)
+		key := recordKey(record, domain)
 		desiredKeys[key] = struct{}{}
 		candidates := currentByKey[key]
 		if len(candidates) == 0 {
@@ -549,13 +549,13 @@ func diffRecords(current, desired []Record, manageUnlisted bool) []interfaces.Fi
 		}
 		current := candidates[0]
 		currentByKey[key] = candidates[1:]
-		if !recordMatches(current, record) {
+		if !recordMatches(current, record, domain) {
 			changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(current), New: recordOutput(record)})
 		}
 	}
 	if manageUnlisted {
 		for _, record := range current {
-			if _, ok := desiredKeys[recordKey(record)]; !ok {
+			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
 				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
 			}
 		}
@@ -563,9 +563,9 @@ func diffRecords(current, desired []Record, manageUnlisted bool) []interfaces.Fi
 	return changes
 }
 
-func recordMatches(current, desired Record) bool {
+func recordMatches(current, desired Record, domain string) bool {
 	if !strings.EqualFold(current.Type, desired.Type) ||
-		canonicalName(current.Name) != canonicalName(desired.Name) ||
+		canonicalName(current.Name, domain) != canonicalName(desired.Name, domain) ||
 		canonicalData(current.Type, current.Data) != canonicalData(desired.Type, desired.Data) ||
 		current.TTL != desired.TTL ||
 		current.Priority != desired.Priority ||
@@ -585,15 +585,17 @@ func domainAndZoneIDFromRef(ref interfaces.ResourceRef) (string, string) {
 	return ref.Name, ref.ProviderID
 }
 
-func recordKey(record Record) string {
-	parts := []string{strings.ToUpper(record.Type), canonicalName(record.Name), canonicalData(record.Type, record.Data)}
+func recordKey(record Record, domain string) string {
+	parts := []string{strings.ToUpper(record.Type), canonicalName(record.Name, domain), canonicalData(record.Type, record.Data)}
 	if strings.EqualFold(record.Type, "MX") || strings.EqualFold(record.Type, "SRV") {
 		parts = append(parts, fmt.Sprint(record.Priority))
 	}
 	return strings.Join(parts, "\x00")
 }
 
-func canonicalName(name string) string { return strings.ToLower(strings.TrimSuffix(name, ".")) }
+func canonicalName(name, domain string) string {
+	return strings.ToLower(normalizeRecordName(strings.TrimSpace(name), strings.TrimSpace(domain)))
+}
 
 func canonicalData(recordType, data string) string {
 	switch strings.ToUpper(recordType) {
