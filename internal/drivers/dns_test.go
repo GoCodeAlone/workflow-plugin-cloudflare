@@ -155,6 +155,35 @@ func TestDNSDriver_CreateCreatesMissingZoneAndRecord(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_CreateSendsRawTXTContentToCloudflare(t *testing.T) {
+	fake := &fakeCFClient{}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":     "example.com",
+			"account_id": "acct",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": "google-site-verification=abc123", "ttl": 300},
+				map[string]any{"type": "TXT", "name": "_dmarc", "data": `"v=DMARC1; p=none"`, "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(fake.createdRecords) != 2 {
+		t.Fatalf("createdRecords len = %d, want 2", len(fake.createdRecords))
+	}
+	if got, want := fake.createdRecords[0].Data, "google-site-verification=abc123"; got != want {
+		t.Fatalf("TXT data sent to Cloudflare = %q, want %q", got, want)
+	}
+	if got, want := fake.createdRecords[1].Data, "v=DMARC1; p=none"; got != want {
+		t.Fatalf("quoted TXT input sent to Cloudflare = %q, want raw %q", got, want)
+	}
+}
+
 func TestDNSDriver_CreateTimesOutBlockedClientOperation(t *testing.T) {
 	fake := &blockingListRecordsClient{
 		fakeCFClient: fakeCFClient{
@@ -411,6 +440,37 @@ func TestDNSDriver_DiffNormalizesRelativeRecordNames(t *testing.T) {
 	}
 	if diff.NeedsUpdate {
 		t.Fatalf("diff = %#v, want no update for equivalent relative/FQDN record names", diff)
+	}
+}
+
+func TestDNSDriver_DiffNormalizesTXTQuotePresentation(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "TXT", "name": "example.com", "data": "google-site-verification=abc123", "ttl": 300,
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "@", "data": `"google-site-verification=abc123"`, "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want no update for equivalent TXT quote presentation", diff)
 	}
 }
 

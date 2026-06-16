@@ -36,8 +36,13 @@ resources:
         - { type: A, name: "@", data: 203.0.113.10, ttl: 300, proxied: true }
         - { type: CNAME, name: www, data: example.com, ttl: 300, proxied: true }
         - { type: MX, name: "@", data: aspmx.l.google.com, ttl: 300, priority: 1 }
-        - { type: TXT, name: "@", data: "v=spf1 include:_spf.google.com ~all", ttl: 300 }
+        - { type: TXT, name: "@", data: '"v=spf1 include:_spf.google.com ~all"', ttl: 300 }
 ```
+
+TXT `data` values may be written with or without one outer pair of double
+quotes. The driver sends raw TXT content to the Cloudflare API, compares quoted
+and unquoted forms equivalently, and emits quoted TXT values in read/import
+outputs for Cloudflare-compatible presentation.
 
 ## HTTP Redirects
 
