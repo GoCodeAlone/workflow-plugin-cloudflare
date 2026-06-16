@@ -569,6 +569,81 @@ func TestDNSDriver_UpdateNormalizesRelativeCurrentTXTMarkerBeforeMatching(t *tes
 	}
 }
 
+func TestDNSDriver_UpdateDedupesEquivalentDesiredTXTMarkers(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{
+				ID:   "managed",
+				Type: "TXT",
+				Name: "_workflow-dns-managed.example.com",
+				Data: "heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-example-com",
+				TTL:  300,
+			},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed.example.com",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-example-com"`,
+					"ttl":  300,
+				},
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-example-com"`,
+					"ttl":  300,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.createdRecords) != 0 {
+		t.Fatalf("createdRecords = %#v, want none", fake.createdRecords)
+	}
+	if len(fake.updatedRecords) != 0 {
+		t.Fatalf("updatedRecords = %#v, want none", fake.updatedRecords)
+	}
+}
+
+func TestDNSDriver_DiffRejectsConflictingDuplicateDesiredRecords(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	_, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "TXT", "name": "_workflow-dns-managed.example.com", "data": `"same"`, "ttl": 300},
+				map[string]any{"type": "TXT", "name": "_workflow-dns-managed", "data": `"same"`, "ttl": 600},
+			},
+		},
+	}, &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain":  "example.com",
+			"records": []map[string]any{},
+		},
+	})
+	if err == nil {
+		t.Fatal("Diff returned nil error, want conflicting duplicate error")
+	}
+	if !strings.Contains(err.Error(), "conflicting duplicate TXT record") {
+		t.Fatalf("Diff error = %v, want conflicting duplicate TXT record", err)
+	}
+}
+
 func TestDNSDriver_UpdateDeletesUnlistedRecordsWhenManaged(t *testing.T) {
 	fake := &fakeCFClient{
 		zone: &Zone{ID: "zone", Name: "example.com"},
