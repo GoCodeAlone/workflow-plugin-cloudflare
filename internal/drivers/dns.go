@@ -552,7 +552,7 @@ func dedupeDesiredRecords(records []Record, domain string) ([]Record, error) {
 			continue
 		}
 		if !recordMatches(existing, record, domain) {
-			return nil, fmt.Errorf("records contains conflicting duplicate %s record %q", record.Type, record.Name)
+			return nil, fmt.Errorf("records contain conflicting duplicate %s record %q", record.Type, record.Name)
 		}
 	}
 	return out, nil

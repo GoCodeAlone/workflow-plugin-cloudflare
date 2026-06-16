@@ -639,8 +639,8 @@ func TestDNSDriver_DiffRejectsConflictingDuplicateDesiredRecords(t *testing.T) {
 	if err == nil {
 		t.Fatal("Diff returned nil error, want conflicting duplicate error")
 	}
-	if !strings.Contains(err.Error(), "conflicting duplicate TXT record") {
-		t.Fatalf("Diff error = %v, want conflicting duplicate TXT record", err)
+	if !strings.Contains(err.Error(), "records contain conflicting duplicate TXT record") {
+		t.Fatalf("Diff error = %v, want records contain conflicting duplicate TXT record", err)
 	}
 }
 
