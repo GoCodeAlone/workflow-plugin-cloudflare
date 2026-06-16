@@ -39,9 +39,10 @@ resources:
         - { type: TXT, name: "@", data: '"v=spf1 include:_spf.google.com ~all"', ttl: 300 }
 ```
 
-TXT `data` values are normalized to Cloudflare's quoted presentation form on
-create, update, read, and import. Existing unquoted config remains accepted, and
-already-quoted TXT values are not double wrapped.
+TXT `data` values may be written with or without one outer pair of double
+quotes. The driver sends raw TXT content to the Cloudflare API, compares quoted
+and unquoted forms equivalently, and emits quoted TXT values in read/import
+outputs for Cloudflare-compatible presentation.
 
 ## HTTP Redirects
 

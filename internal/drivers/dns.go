@@ -417,7 +417,7 @@ func recordFromConfig(index int, m map[string]any, domain string) (Record, error
 	if err != nil {
 		return Record{}, err
 	}
-	data = normalizeTXTData(recordType, data)
+	data = rawTXTData(recordType, data)
 	ttl, err := intField(index, m, "ttl", 1)
 	if err != nil {
 		return Record{}, err
@@ -600,20 +600,27 @@ func canonicalData(recordType, data string) string {
 	case "CNAME", "MX", "NS", "SRV":
 		return strings.ToLower(strings.TrimSuffix(data, "."))
 	case "TXT":
-		return normalizeTXTData(recordType, data)
+		return rawTXTData(recordType, data)
 	default:
 		return data
 	}
 }
 
-func normalizeTXTData(recordType, data string) string {
+func rawTXTData(recordType, data string) string {
 	if !strings.EqualFold(recordType, "TXT") {
 		return data
 	}
 	if len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"' {
+		return data[1 : len(data)-1]
+	}
+	return data
+}
+
+func presentationTXTData(recordType, data string) string {
+	if !strings.EqualFold(recordType, "TXT") {
 		return data
 	}
-	return `"` + data + `"`
+	return `"` + rawTXTData(recordType, data) + `"`
 }
 
 func boolPtrValue(v *bool) bool {
@@ -676,7 +683,7 @@ func recordOutput(record Record) map[string]any {
 		"id":        record.ID,
 		"type":      strings.ToUpper(record.Type),
 		"name":      record.Name,
-		"data":      normalizeTXTData(record.Type, record.Data),
+		"data":      presentationTXTData(record.Type, record.Data),
 		"ttl":       record.TTL,
 		"priority":  record.Priority,
 		"proxiable": record.Proxiable,
@@ -722,7 +729,7 @@ func recordsFromOutputs(outputs map[string]any) ([]Record, error) {
 		record.Type, _ = m["type"].(string)
 		record.Name, _ = m["name"].(string)
 		record.Data, _ = m["data"].(string)
-		record.Data = normalizeTXTData(record.Type, record.Data)
+		record.Data = rawTXTData(record.Type, record.Data)
 		record.Comment, _ = m["comment"].(string)
 		record.TTL = intOutput(m["ttl"])
 		record.Priority = intOutput(m["priority"])
@@ -895,7 +902,7 @@ func recordFromSDK(record *cfdns.RecordResponse) Record {
 		ID:        record.ID,
 		Type:      string(record.Type),
 		Name:      record.Name,
-		Data:      normalizeTXTData(string(record.Type), record.Content),
+		Data:      rawTXTData(string(record.Type), record.Content),
 		TTL:       int(record.TTL),
 		Priority:  int(record.Priority),
 		Proxied:   &proxied,
@@ -919,7 +926,7 @@ func newRecordBody(record Record) cfdns.RecordNewParamsBody {
 		Name:    cloudflare.String(record.Name),
 		TTL:     cloudflare.F(cfdns.TTL(record.TTL)),
 		Type:    cloudflare.F(cfdns.RecordNewParamsBodyType(record.Type)),
-		Content: cloudflare.String(normalizeTXTData(record.Type, record.Data)),
+		Content: cloudflare.String(rawTXTData(record.Type, record.Data)),
 	}
 	if record.Priority > 0 || record.Type == "MX" {
 		body.Priority = cloudflare.Float(float64(record.Priority))
@@ -938,7 +945,7 @@ func editRecordBody(record Record) cfdns.RecordEditParamsBody {
 		Name:    cloudflare.String(record.Name),
 		TTL:     cloudflare.F(cfdns.TTL(record.TTL)),
 		Type:    cloudflare.F(cfdns.RecordEditParamsBodyType(record.Type)),
-		Content: cloudflare.String(normalizeTXTData(record.Type, record.Data)),
+		Content: cloudflare.String(rawTXTData(record.Type, record.Data)),
 	}
 	if record.Priority > 0 || record.Type == "MX" {
 		body.Priority = cloudflare.Float(float64(record.Priority))
