@@ -304,9 +304,13 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 	}
 	currentByKey := recordsByKey(current, zoneName)
 	desiredKeys := map[string]struct{}{}
+	cleanupManagedMarkers := false
 	for _, record := range desired {
 		key := recordKey(record, zoneName)
 		desiredKeys[key] = struct{}{}
+		if isWorkflowManagedMarker(record, zoneName) {
+			cleanupManagedMarkers = true
+		}
 		existing := currentByKey[key]
 		if len(existing) == 0 {
 			if _, err := d.client.CreateRecord(ctx, zoneID, record); err != nil {
@@ -318,6 +322,19 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 		if !recordMatches(existing[0], record, zoneName) {
 			if _, err := d.client.UpdateRecord(ctx, zoneID, existing[0].ID, record); err != nil {
 				return fmt.Errorf("update %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
+			}
+		}
+	}
+	if cleanupManagedMarkers {
+		for _, record := range current {
+			if !isWorkflowManagedMarker(record, zoneName) {
+				continue
+			}
+			if _, ok := desiredKeys[recordKey(record, zoneName)]; ok {
+				continue
+			}
+			if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
+				return fmt.Errorf("delete stale workflow managed marker %q in zone %q: %w", record.Name, zoneID, err)
 			}
 		}
 	}
@@ -603,6 +620,18 @@ func recordMatches(current, desired Record, domain string) bool {
 	return true
 }
 
+func isWorkflowManagedMarker(record Record, domain string) bool {
+	if !strings.EqualFold(record.Type, "TXT") {
+		return false
+	}
+	name := "_workflow-dns-managed." + strings.ToLower(strings.TrimSuffix(domain, "."))
+	if canonicalName(record.Name, domain) != name {
+		return false
+	}
+	data := rawTXTData(record.Type, record.Data)
+	return strings.Contains(data, "heritage=wfinfra-v1") && strings.Contains(data, "managed_by=wfctl")
+}
+
 func domainAndZoneIDFromRef(ref interfaces.ResourceRef) (string, string) {
 	if ref.ProviderID != "" && interfaces.ValidateProviderID(ref.ProviderID, interfaces.IDFormatDomainName) {
 		return ref.ProviderID, ""
@@ -638,7 +667,7 @@ func rawTXTData(recordType, data string) string {
 		return data
 	}
 	if len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"' {
-		return data[1 : len(data)-1]
+		return unescapeTXTData(data[1 : len(data)-1])
 	}
 	return data
 }
@@ -647,7 +676,32 @@ func presentationTXTData(recordType, data string) string {
 	if !strings.EqualFold(recordType, "TXT") {
 		return data
 	}
-	return `"` + rawTXTData(recordType, data) + `"`
+	return `"` + escapeTXTData(rawTXTData(recordType, data)) + `"`
+}
+
+func escapeTXTData(data string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return replacer.Replace(data)
+}
+
+func unescapeTXTData(data string) string {
+	if !strings.Contains(data, `\`) {
+		return data
+	}
+	var builder strings.Builder
+	builder.Grow(len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\\' && i+1 < len(data) {
+			next := data[i+1]
+			if next == '\\' || next == '"' {
+				builder.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		builder.WriteByte(data[i])
+	}
+	return builder.String()
 }
 
 func boolPtrValue(v *bool) bool {
@@ -953,7 +1007,7 @@ func newRecordBody(record Record) cfdns.RecordNewParamsBody {
 		Name:    cloudflare.String(record.Name),
 		TTL:     cloudflare.F(cfdns.TTL(record.TTL)),
 		Type:    cloudflare.F(cfdns.RecordNewParamsBodyType(record.Type)),
-		Content: cloudflare.String(rawTXTData(record.Type, record.Data)),
+		Content: cloudflare.String(presentationTXTData(record.Type, record.Data)),
 	}
 	if record.Priority > 0 || record.Type == "MX" {
 		body.Priority = cloudflare.Float(float64(record.Priority))
@@ -972,7 +1026,7 @@ func editRecordBody(record Record) cfdns.RecordEditParamsBody {
 		Name:    cloudflare.String(record.Name),
 		TTL:     cloudflare.F(cfdns.TTL(record.TTL)),
 		Type:    cloudflare.F(cfdns.RecordEditParamsBodyType(record.Type)),
-		Content: cloudflare.String(rawTXTData(record.Type, record.Data)),
+		Content: cloudflare.String(presentationTXTData(record.Type, record.Data)),
 	}
 	if record.Priority > 0 || record.Type == "MX" {
 		body.Priority = cloudflare.Float(float64(record.Priority))

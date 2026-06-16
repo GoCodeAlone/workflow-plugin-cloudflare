@@ -40,9 +40,10 @@ resources:
 ```
 
 TXT `data` values may be written with or without one outer pair of double
-quotes. The driver sends raw TXT content to the Cloudflare API, compares quoted
-and unquoted forms equivalently, and emits quoted TXT values in read/import
-outputs for Cloudflare-compatible presentation.
+quotes. The driver sends quoted TXT content to the Cloudflare API to match
+Cloudflare's dashboard presentation, compares quoted and unquoted forms
+equivalently, and emits quoted TXT values in read/import outputs for
+Cloudflare-compatible presentation.
 
 ## HTTP Redirects
 
