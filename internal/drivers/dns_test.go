@@ -155,7 +155,7 @@ func TestDNSDriver_CreateCreatesMissingZoneAndRecord(t *testing.T) {
 	}
 }
 
-func TestDNSDriver_CreateSendsRawTXTContentToCloudflare(t *testing.T) {
+func TestDNSDriver_CreateCanonicalizesTXTContentInState(t *testing.T) {
 	fake := &fakeCFClient{}
 	driver := NewDNSDriverWithClient(fake)
 	_, err := driver.Create(context.Background(), interfaces.ResourceSpec{
@@ -181,6 +181,18 @@ func TestDNSDriver_CreateSendsRawTXTContentToCloudflare(t *testing.T) {
 	}
 	if got, want := fake.createdRecords[1].Data, "v=DMARC1; p=none"; got != want {
 		t.Fatalf("quoted TXT input sent to Cloudflare = %q, want raw %q", got, want)
+	}
+}
+
+func TestDNSDriver_RecordBodiesSendQuotedTXTContentToCloudflare(t *testing.T) {
+	newBody := newRecordBody(Record{Type: "TXT", Name: "example.com", Data: "google-site-verification=abc123", TTL: 300})
+	if got, want := newBody.Content.Value, `"google-site-verification=abc123"`; got != want {
+		t.Fatalf("new TXT content = %q, want %q", got, want)
+	}
+
+	editBody := editRecordBody(Record{Type: "TXT", Name: "_dmarc.example.com", Data: `"v=DMARC1; p=none"`, TTL: 300})
+	if got, want := editBody.Content.Value, `"v=DMARC1; p=none"`; got != want {
+		t.Fatalf("edit TXT content = %q, want %q", got, want)
 	}
 }
 
@@ -758,6 +770,52 @@ func TestDNSDriver_UpdateDeletesUnlistedRecordsWhenManaged(t *testing.T) {
 	}
 	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "delete-me" {
 		t.Fatalf("deletedRecords = %#v, want delete-me", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_UpdateDeletesStaleWorkflowManagedMarkersWhenUnlistedRecordsArePreserved(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "gigbagg.rocks"},
+		records: []Record{
+			{
+				ID:   "current-marker",
+				Type: "TXT",
+				Name: "_workflow-dns-managed.gigbagg.rocks",
+				Data: "heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks",
+				TTL:  300,
+			},
+			{
+				ID:   "stale-marker",
+				Type: "TXT",
+				Name: "_workflow-dns-managed.gigbagg.rocks",
+				Data: "heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks",
+				TTL:  300,
+			},
+			{ID: "unmanaged", Type: "TXT", Name: "gigbagg.rocks", Data: "external", TTL: 300},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "gigbagg.rocks", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "gigbagg.rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "stale-marker" {
+		t.Fatalf("deletedRecords = %#v, want stale-marker only", fake.deletedRecords)
 	}
 }
 
