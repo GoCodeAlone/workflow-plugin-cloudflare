@@ -442,6 +442,38 @@ func TestDNSDriver_DiffDoesNotManageComputedRecordFieldsWhenOmitted(t *testing.T
 	}
 }
 
+func TestDNSDriver_DiffManagesExplicitNonEmptyComment(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "A", "name": "example.com", "data": "192.0.2.1", "ttl": 1,
+				"comment": "provider comment",
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "A", "name": "@", "data": "192.0.2.1", "ttl": 1, "comment": "managed comment"},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want update when explicit non-empty comment differs", diff)
+	}
+}
+
 func TestDNSDriver_UpdatePreservesComputedRecordFieldsWhenOmitted(t *testing.T) {
 	proxied := true
 	fake := &fakeCFClient{
