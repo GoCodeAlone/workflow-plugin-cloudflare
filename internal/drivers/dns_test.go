@@ -194,6 +194,14 @@ func TestDNSDriver_RecordBodiesSendQuotedTXTContentToCloudflare(t *testing.T) {
 	if got, want := editBody.Content.Value, `"v=DMARC1; p=none"`; got != want {
 		t.Fatalf("edit TXT content = %q, want %q", got, want)
 	}
+
+	escapedBody := newRecordBody(Record{Type: "TXT", Name: "escaped.example.com", Data: `owner="wfctl"\state`, TTL: 300})
+	if got, want := escapedBody.Content.Value, `"owner=\"wfctl\"\\state"`; got != want {
+		t.Fatalf("escaped TXT content = %q, want %q", got, want)
+	}
+	if got, want := rawTXTData("TXT", escapedBody.Content.Value), `owner="wfctl"\state`; got != want {
+		t.Fatalf("escaped TXT canonical data = %q, want %q", got, want)
+	}
 }
 
 func TestDNSDriver_CreateTimesOutBlockedClientOperation(t *testing.T) {

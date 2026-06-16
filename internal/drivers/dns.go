@@ -667,7 +667,7 @@ func rawTXTData(recordType, data string) string {
 		return data
 	}
 	if len(data) >= 2 && data[0] == '"' && data[len(data)-1] == '"' {
-		return data[1 : len(data)-1]
+		return unescapeTXTData(data[1 : len(data)-1])
 	}
 	return data
 }
@@ -676,7 +676,32 @@ func presentationTXTData(recordType, data string) string {
 	if !strings.EqualFold(recordType, "TXT") {
 		return data
 	}
-	return `"` + rawTXTData(recordType, data) + `"`
+	return `"` + escapeTXTData(rawTXTData(recordType, data)) + `"`
+}
+
+func escapeTXTData(data string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return replacer.Replace(data)
+}
+
+func unescapeTXTData(data string) string {
+	if !strings.Contains(data, `\`) {
+		return data
+	}
+	var builder strings.Builder
+	builder.Grow(len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\\' && i+1 < len(data) {
+			next := data[i+1]
+			if next == '\\' || next == '"' {
+				builder.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		builder.WriteByte(data[i])
+	}
+	return builder.String()
 }
 
 func boolPtrValue(v *bool) bool {
