@@ -268,6 +268,94 @@ func TestSDKClientCreateZoneDoesNotRetryConflict(t *testing.T) {
 	}
 }
 
+func TestSDKClientListRecordsUsesConservativePageSizeAndStopsAtTotalPages(t *testing.T) {
+	var page1Hits atomic.Int32
+	var page2Hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/zones/zone123/dns_records" {
+			t.Errorf("request = %s %s, want GET /zones/zone123/dns_records", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("per_page"); got != "100" {
+			t.Errorf("per_page = %q, want 100", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "1":
+			page1Hits.Add(1)
+			_, _ = fmt.Fprint(w, `{"success":true,"errors":[],"messages":[],"result":[{"id":"rec1","type":"A","name":"example.com","content":"192.0.2.10","ttl":300}],"result_info":{"page":1,"per_page":100,"count":1,"total_count":1,"total_pages":1}}`)
+		case "2":
+			page2Hits.Add(1)
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = fmt.Fprint(w, `{"success":false,"errors":[{"code":1000,"message":"unexpected page 2"}],"messages":[],"result":null}`)
+		default:
+			t.Errorf("unexpected page query %q", r.URL.Query().Get("page"))
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := newSDKClientWithOptions("token", time.Second, option.WithBaseURL(server.URL))
+	records, err := client.ListRecords(context.Background(), "zone123")
+	if err != nil {
+		t.Fatalf("ListRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "rec1" {
+		t.Fatalf("records = %#v, want rec1", records)
+	}
+	if got := page1Hits.Load(); got != 1 {
+		t.Fatalf("page 1 hits = %d, want 1", got)
+	}
+	if got := page2Hits.Load(); got != 0 {
+		t.Fatalf("page 2 hits = %d, want 0 because total_pages=1", got)
+	}
+}
+
+func TestSDKClientListRecordsRetriesPageFailures(t *testing.T) {
+	var page1Hits atomic.Int32
+	var page2Hits atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/zones/zone123/dns_records" {
+			t.Errorf("request = %s %s, want GET /zones/zone123/dns_records", r.Method, r.URL.Path)
+		}
+		if got := r.URL.Query().Get("per_page"); got != "100" {
+			t.Errorf("per_page = %q, want 100", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "1":
+			page1Hits.Add(1)
+			_, _ = fmt.Fprint(w, `{"success":true,"errors":[],"messages":[],"result":[{"id":"rec1","type":"A","name":"example.com","content":"192.0.2.10","ttl":300}],"result_info":{"page":1,"per_page":100,"count":1,"total_count":1,"total_pages":2}}`)
+		case "2":
+			hit := page2Hits.Add(1)
+			if hit == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = fmt.Fprint(w, `{"success":false,"errors":[{"code":10001,"message":"Unable to authenticate request"}],"messages":[],"result":null}`)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"success":true,"errors":[],"messages":[],"result":[],"result_info":{"page":2,"per_page":100,"count":0,"total_count":1,"total_pages":2}}`)
+		default:
+			t.Errorf("unexpected page query %q", r.URL.Query().Get("page"))
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := newSDKClientWithOptions("token", time.Second, option.WithBaseURL(server.URL))
+	records, err := client.ListRecords(context.Background(), "zone123")
+	if err != nil {
+		t.Fatalf("ListRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "rec1" {
+		t.Fatalf("records = %#v, want rec1", records)
+	}
+	if got := page1Hits.Load(); got != 1 {
+		t.Fatalf("page 1 hits = %d, want 1", got)
+	}
+	if got := page2Hits.Load(); got != 2 {
+		t.Fatalf("page 2 hits = %d, want retry after transient failure", got)
+	}
+}
+
 type blockingListRecordsClient struct {
 	fakeCFClient
 }

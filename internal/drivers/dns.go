@@ -2,6 +2,7 @@ package drivers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -73,6 +74,8 @@ type DNSDriver struct {
 const (
 	defaultRequestTimeout   = 30 * time.Second
 	defaultOperationTimeout = 2 * time.Minute
+	dnsRecordListPageSize   = 100
+	dnsRecordListMaxRetries = 2
 )
 
 // NormalizeRequestTimeout returns the per-HTTP-request Cloudflare API timeout,
@@ -1004,19 +1007,40 @@ func (c *sdkClient) DeleteZone(ctx context.Context, zoneID string) error {
 }
 
 func (c *sdkClient) ListRecords(ctx context.Context, zoneID string) ([]Record, error) {
-	iter := c.client.DNS.Records.ListAutoPaging(ctx, cfdns.RecordListParams{
-		ZoneID:  cloudflare.String(zoneID),
-		PerPage: cloudflare.Float(500),
-	})
 	var out []Record
-	for iter.Next() {
-		record := iter.Current()
-		out = append(out, recordFromSDK(&record))
-	}
-	if err := iter.Err(); err != nil {
-		return nil, err
+	for pageNumber := 1; ; pageNumber++ {
+		page, err := c.client.DNS.Records.List(ctx, cfdns.RecordListParams{
+			ZoneID:  cloudflare.String(zoneID),
+			Page:    cloudflare.Float(float64(pageNumber)),
+			PerPage: cloudflare.Float(dnsRecordListPageSize),
+		}, option.WithMaxRetries(dnsRecordListMaxRetries))
+		if err != nil {
+			return nil, err
+		}
+		for i := range page.Result {
+			out = append(out, recordFromSDK(&page.Result[i]))
+		}
+		if totalPages, ok := dnsRecordTotalPages(page.ResultInfo.JSON.RawJSON()); ok && int64(pageNumber) >= totalPages {
+			break
+		}
+		if len(page.Result) == 0 {
+			break
+		}
 	}
 	return out, nil
+}
+
+func dnsRecordTotalPages(raw string) (int64, bool) {
+	var info struct {
+		TotalPages int64 `json:"total_pages"`
+	}
+	if raw == "" {
+		return 0, false
+	}
+	if err := json.Unmarshal([]byte(raw), &info); err != nil || info.TotalPages <= 0 {
+		return 0, false
+	}
+	return info.TotalPages, true
 }
 
 func (c *sdkClient) CreateRecord(ctx context.Context, zoneID string, record Record) (*Record, error) {
