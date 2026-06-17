@@ -11,8 +11,7 @@ operations upsert declared records by default. Records that exist in
 Cloudflare but are not declared are preserved unless `manage_unlisted: true`
 is set. When `manage_unlisted: true` is set, replacing a hostname between
 `A`/`AAAA` and `CNAME` deletes the incompatible existing record before creating
-the replacement so Cloudflare's record-type exclusivity rules do not reject the
-apply.
+the replacement, avoiding Cloudflare API rejection from record-type conflicts.
 
 ## Configuration
 
