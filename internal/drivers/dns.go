@@ -832,6 +832,9 @@ func recordsFromOutputs(outputs map[string]any) ([]Record, error) {
 		record.Type, _ = m["type"].(string)
 		record.Name, _ = m["name"].(string)
 		record.Data, _ = m["data"].(string)
+		if record.Data == "" {
+			record.Data, _ = m["value"].(string)
+		}
 		record.Data = rawTXTData(record.Type, record.Data)
 		record.Comment, _ = m["comment"].(string)
 		record.TTL = intOutput(m["ttl"])
