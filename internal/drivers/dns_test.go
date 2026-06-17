@@ -650,6 +650,66 @@ func TestDNSDriver_DiffDetectsStaleWorkflowManagedMarkersWhenUnlistedRecordsAreP
 	}
 }
 
+func TestDNSDriver_DiffReadsCurrentRecordValueFallback(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "gigbagg.rocks",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "gigbagg.rocks",
+			"records": []map[string]any{
+				{
+					"id":    "current-marker",
+					"type":  "TXT",
+					"name":  "_workflow-dns-managed.gigbagg.rocks",
+					"value": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":   300,
+				},
+				{
+					"id":    "stale-marker",
+					"type":  "TXT",
+					"name":  "_workflow-dns-managed.gigbagg.rocks",
+					"value": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks"`,
+					"ttl":   300,
+				},
+			},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "gigbagg.rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("diff.NeedsUpdate = false, want true for stale workflow marker from value field")
+	}
+	if len(diff.Changes) != 1 {
+		t.Fatalf("changes len = %d, want 1: %#v", len(diff.Changes), diff.Changes)
+	}
+	old, ok := diff.Changes[0].Old.(map[string]any)
+	if !ok {
+		t.Fatalf("change old = %#v, want record output", diff.Changes[0].Old)
+	}
+	if got, want := old["id"], "stale-marker"; got != want {
+		t.Fatalf("deleted marker id = %q, want %q", got, want)
+	}
+}
+
 func TestDNSDriver_DiffDetectsDuplicateWorkflowManagedMarkersWithSameKey(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{
