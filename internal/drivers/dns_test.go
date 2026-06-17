@@ -590,6 +590,37 @@ func TestDNSDriver_DiffNormalizesTXTQuotePresentation(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_DiffNormalizesApexCNAMETarget(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "example.com",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "example.com",
+			"records": []map[string]any{{
+				"type": "CNAME", "name": "www.example.com", "data": "example.com", "ttl": 300,
+			}},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "@", "ttl": 300},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if diff.NeedsUpdate {
+		t.Fatalf("diff = %#v, want no update for CNAME @ target matching zone apex", diff)
+	}
+}
+
 func TestDNSDriver_DiffDetectsStaleWorkflowManagedMarkersWhenUnlistedRecordsArePreserved(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{
@@ -886,6 +917,35 @@ func TestDNSDriver_UpdateNormalizesRelativeRecordNamesBeforeMatching(t *testing.
 	}
 	if len(fake.createdRecords) != 0 {
 		t.Fatalf("createdRecords = %#v, want none", fake.createdRecords)
+	}
+}
+
+func TestDNSDriver_UpdateNormalizesApexCNAMETargetBeforeMatching(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{ID: "www", Type: "CNAME", Name: "www.example.com", Data: "example.com", TTL: 300},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "CNAME", "name": "www", "data": "@", "ttl": 300},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.createdRecords) != 0 {
+		t.Fatalf("createdRecords = %#v, want none", fake.createdRecords)
+	}
+	if len(fake.updatedRecords) != 0 {
+		t.Fatalf("updatedRecords = %#v, want none", fake.updatedRecords)
 	}
 }
 

@@ -503,7 +503,7 @@ func recordFromConfig(index int, m map[string]any, domain string) (Record, error
 		}
 		proxied = &value
 	}
-	record := Record{Type: recordType, Name: normalizeRecordName(name, domain), Data: data, TTL: ttl, Priority: priority, Proxied: proxied, Comment: comment}
+	record := Record{Type: recordType, Name: normalizeRecordName(name, domain), Data: normalizeRecordData(recordType, data, domain), TTL: ttl, Priority: priority, Proxied: proxied, Comment: comment}
 	if err := validateRecord(index, record); err != nil {
 		return Record{}, err
 	}
@@ -667,7 +667,7 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 func recordMatches(current, desired Record, domain string) bool {
 	if !strings.EqualFold(current.Type, desired.Type) ||
 		canonicalName(current.Name, domain) != canonicalName(desired.Name, domain) ||
-		canonicalData(current.Type, current.Data) != canonicalData(desired.Type, desired.Data) ||
+		canonicalData(current.Type, current.Data, domain) != canonicalData(desired.Type, desired.Data, domain) ||
 		current.TTL != desired.TTL ||
 		current.Priority != desired.Priority {
 		return false
@@ -725,7 +725,7 @@ func domainAndZoneIDFromRef(ref interfaces.ResourceRef) (string, string) {
 }
 
 func recordKey(record Record, domain string) string {
-	parts := []string{strings.ToUpper(record.Type), canonicalName(record.Name, domain), canonicalData(record.Type, record.Data)}
+	parts := []string{strings.ToUpper(record.Type), canonicalName(record.Name, domain), canonicalData(record.Type, record.Data, domain)}
 	if strings.EqualFold(record.Type, "MX") || strings.EqualFold(record.Type, "SRV") {
 		parts = append(parts, fmt.Sprint(record.Priority))
 	}
@@ -740,10 +740,23 @@ func canonicalName(name, domain string) string {
 	return strings.ToLower(normalizeRecordName(strings.TrimSpace(name), strings.TrimSpace(domain)))
 }
 
-func canonicalData(recordType, data string) string {
+func normalizeRecordData(recordType, data, domain string) string {
 	switch strings.ToUpper(recordType) {
 	case "CNAME", "MX", "NS", "SRV":
-		return strings.ToLower(strings.TrimSuffix(data, "."))
+		trimmed := strings.TrimSuffix(strings.TrimSpace(data), ".")
+		if trimmed == "@" {
+			return strings.TrimSuffix(strings.TrimSpace(domain), ".")
+		}
+		return trimmed
+	default:
+		return data
+	}
+}
+
+func canonicalData(recordType, data, domain string) string {
+	switch strings.ToUpper(recordType) {
+	case "CNAME", "MX", "NS", "SRV":
+		return strings.ToLower(normalizeRecordData(recordType, data, domain))
 	case "TXT":
 		return rawTXTData(recordType, data)
 	default:
