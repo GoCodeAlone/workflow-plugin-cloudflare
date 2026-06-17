@@ -9,7 +9,9 @@ guarded auto-renew management.
 One `infra.dns` resource manages one Cloudflare zone. Create and update
 operations upsert declared records by default. Records that exist in
 Cloudflare but are not declared are preserved unless `manage_unlisted: true`
-is set.
+is set. When `manage_unlisted: true` is set, replacing a hostname between
+`A`/`AAAA` and `CNAME` deletes the incompatible existing record before creating
+the replacement, avoiding Cloudflare API rejection from record-type conflicts.
 
 ## Configuration
 

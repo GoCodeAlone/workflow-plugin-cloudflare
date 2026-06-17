@@ -27,6 +27,7 @@ type fakeCFClient struct {
 	createdRecords  []Record
 	updatedRecords  []Record
 	deletedRecords  []string
+	operations      []string
 }
 
 func (f *fakeCFClient) GetZone(_ context.Context, domain, zoneID string) (*Zone, error) {
@@ -95,6 +96,7 @@ func (f *fakeCFClient) ListRecords(_ context.Context, _ string) ([]Record, error
 
 func (f *fakeCFClient) CreateRecord(_ context.Context, _ string, record Record) (*Record, error) {
 	record.ID = "created"
+	f.operations = append(f.operations, "create:"+record.Type+":"+record.Name)
 	f.createdRecords = append(f.createdRecords, record)
 	f.records = append(f.records, record)
 	return &record, nil
@@ -102,6 +104,7 @@ func (f *fakeCFClient) CreateRecord(_ context.Context, _ string, record Record) 
 
 func (f *fakeCFClient) UpdateRecord(_ context.Context, _ string, recordID string, record Record) (*Record, error) {
 	record.ID = recordID
+	f.operations = append(f.operations, "update:"+recordID+":"+record.Type+":"+record.Name)
 	f.updatedRecords = append(f.updatedRecords, record)
 	for i := range f.records {
 		if f.records[i].ID == recordID {
@@ -112,6 +115,7 @@ func (f *fakeCFClient) UpdateRecord(_ context.Context, _ string, recordID string
 }
 
 func (f *fakeCFClient) DeleteRecord(_ context.Context, _ string, recordID string) error {
+	f.operations = append(f.operations, "delete:"+recordID)
 	f.deletedRecords = append(f.deletedRecords, recordID)
 	return nil
 }
@@ -1022,6 +1026,50 @@ func TestDNSDriver_UpdateDeletesUnlistedRecordsWhenManaged(t *testing.T) {
 	}
 	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "delete-me" {
 		t.Fatalf("deletedRecords = %#v, want delete-me", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_UpdateDeletesConflictingAddressRecordBeforeCreatingCNAME(t *testing.T) {
+	proxied := true
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "blackorchid-tributeband.com"},
+		records: []Record{
+			{ID: "wildcard-a", Type: "A", Name: "*.blackorchid-tributeband.com", Data: "216.40.34.41", TTL: 900},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "blackorchid-tributeband.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "blackorchid-tributeband.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "blackorchid-tributeband.com",
+			"manage_unlisted": true,
+			"records": []any{
+				map[string]any{
+					"type":    "CNAME",
+					"name":    "*",
+					"data":    "gocodealone-multisite-zeqkn.ondigitalocean.app",
+					"ttl":     1,
+					"proxied": true,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.createdRecords) != 1 {
+		t.Fatalf("createdRecords = %#v, want one CNAME", fake.createdRecords)
+	}
+	if fake.createdRecords[0].Type != "CNAME" || fake.createdRecords[0].Proxied == nil || *fake.createdRecords[0].Proxied != proxied {
+		t.Fatalf("createdRecords[0] = %#v, want proxied CNAME", fake.createdRecords[0])
+	}
+	want := []string{
+		"delete:wildcard-a",
+		"create:CNAME:*.blackorchid-tributeband.com",
+	}
+	if !slices.Equal(fake.operations, want) {
+		t.Fatalf("operations = %#v, want %#v", fake.operations, want)
 	}
 }
 

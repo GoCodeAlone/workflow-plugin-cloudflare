@@ -304,6 +304,7 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 	}
 	currentByKey := recordsByKey(current, zoneName)
 	desiredKeys := map[string]struct{}{}
+	deletedRecordIDs := map[string]struct{}{}
 	cleanupManagedMarkers := false
 	for _, record := range desired {
 		key := recordKey(record, zoneName)
@@ -313,6 +314,9 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 		}
 		existing := currentByKey[key]
 		if len(existing) == 0 {
+			if err := d.deleteConflictingRecordsBeforeCreate(ctx, zoneID, zoneName, record, current, desiredKeys, deletedRecordIDs, manageUnlisted); err != nil {
+				return err
+			}
 			if _, err := d.client.CreateRecord(ctx, zoneID, record); err != nil {
 				return fmt.Errorf("create %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 			}
@@ -328,12 +332,16 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 	if cleanupManagedMarkers {
 		for _, records := range currentByKey {
 			for _, record := range records {
+				if _, ok := deletedRecordIDs[record.ID]; ok {
+					continue
+				}
 				if !isWorkflowManagedMarker(record, zoneName) {
 					continue
 				}
 				if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
 					return fmt.Errorf("delete stale workflow managed marker %q in zone %q: %w", record.Name, zoneID, err)
 				}
+				deletedRecordIDs[record.ID] = struct{}{}
 				desiredKeys[recordKey(record, zoneName)] = struct{}{}
 			}
 		}
@@ -342,12 +350,47 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 		return nil
 	}
 	for _, record := range current {
+		if _, ok := deletedRecordIDs[record.ID]; ok {
+			continue
+		}
 		if _, ok := desiredKeys[recordKey(record, zoneName)]; ok {
 			continue
 		}
 		if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
 			return fmt.Errorf("delete %s record %q in zone %q: %w", record.Type, record.Name, zoneID, err)
 		}
+	}
+	return nil
+}
+
+func (d *DNSDriver) deleteConflictingRecordsBeforeCreate(ctx context.Context, zoneID, zoneName string, desired Record, current []Record, desiredKeys map[string]struct{}, deletedRecordIDs map[string]struct{}, manageUnlisted bool) error {
+	if !hasCloudflareAddressAliasConflictType(desired.Type) {
+		return nil
+	}
+	var conflicts []Record
+	for _, record := range current {
+		if _, ok := deletedRecordIDs[record.ID]; ok {
+			continue
+		}
+		if _, ok := desiredKeys[recordKey(record, zoneName)]; ok {
+			continue
+		}
+		if !cloudflareAddressAliasRecordsConflict(record, desired, zoneName) {
+			continue
+		}
+		conflicts = append(conflicts, record)
+	}
+	if len(conflicts) == 0 {
+		return nil
+	}
+	if !manageUnlisted {
+		return fmt.Errorf("create %s record %q in zone %q conflicts with existing %s record; set manage_unlisted: true to replace incompatible A/AAAA/CNAME records", desired.Type, desired.Name, zoneID, conflicts[0].Type)
+	}
+	for _, record := range conflicts {
+		if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
+			return fmt.Errorf("delete conflicting %s record %q in zone %q before creating %s: %w", record.Type, record.Name, zoneID, desired.Type, err)
+		}
+		deletedRecordIDs[record.ID] = struct{}{}
 	}
 	return nil
 }
@@ -636,6 +679,30 @@ func recordMatches(current, desired Record, domain string) bool {
 		return false
 	}
 	return true
+}
+
+func hasCloudflareAddressAliasConflictType(recordType string) bool {
+	switch strings.ToUpper(recordType) {
+	case "A", "AAAA", "CNAME":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloudflareAddressAliasRecordsConflict(current, desired Record, domain string) bool {
+	currentType := strings.ToUpper(current.Type)
+	desiredType := strings.ToUpper(desired.Type)
+	if !hasCloudflareAddressAliasConflictType(currentType) || !hasCloudflareAddressAliasConflictType(desiredType) {
+		return false
+	}
+	if canonicalName(current.Name, domain) != canonicalName(desired.Name, domain) {
+		return false
+	}
+	if desiredType == "CNAME" {
+		return true
+	}
+	return currentType == "CNAME"
 }
 
 func isWorkflowManagedMarker(record Record, domain string) bool {
