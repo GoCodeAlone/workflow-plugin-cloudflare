@@ -579,6 +579,7 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 	var changes []interfaces.FieldChange
 	currentByKey := recordsByKey(current, domain)
 	desiredKeys := map[string]struct{}{}
+	deletedCurrent := map[string]struct{}{}
 	hasDesiredWorkflowMarker := false
 	for _, record := range desired {
 		key := recordKey(record, domain)
@@ -597,19 +598,23 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 			changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(current), New: recordOutput(record)})
 		}
 	}
-	if manageUnlisted {
-		for _, record := range current {
-			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
-				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
-			}
-		}
-	}
-	if !manageUnlisted && hasDesiredWorkflowMarker {
+	if hasDesiredWorkflowMarker {
 		for _, records := range currentByKey {
 			for _, record := range records {
 				if isWorkflowManagedMarker(record, domain) {
 					changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
+					deletedCurrent[recordIdentity(record, domain)] = struct{}{}
 				}
+			}
+		}
+	}
+	if manageUnlisted {
+		for _, record := range current {
+			if _, ok := deletedCurrent[recordIdentity(record, domain)]; ok {
+				continue
+			}
+			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
+				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
 			}
 		}
 	}
@@ -658,6 +663,10 @@ func recordKey(record Record, domain string) string {
 		parts = append(parts, fmt.Sprint(record.Priority))
 	}
 	return strings.Join(parts, "\x00")
+}
+
+func recordIdentity(record Record, domain string) string {
+	return strings.Join([]string{record.ID, recordKey(record, domain)}, "\x00")
 }
 
 func canonicalName(name, domain string) string {
