@@ -326,15 +326,15 @@ func (d *DNSDriver) applyRecords(ctx context.Context, zoneID, zoneName string, d
 		}
 	}
 	if cleanupManagedMarkers {
-		for _, record := range current {
-			if !isWorkflowManagedMarker(record, zoneName) {
-				continue
-			}
-			if _, ok := desiredKeys[recordKey(record, zoneName)]; ok {
-				continue
-			}
-			if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
-				return fmt.Errorf("delete stale workflow managed marker %q in zone %q: %w", record.Name, zoneID, err)
+		for _, records := range currentByKey {
+			for _, record := range records {
+				if !isWorkflowManagedMarker(record, zoneName) {
+					continue
+				}
+				if err := d.client.DeleteRecord(ctx, zoneID, record.ID); err != nil {
+					return fmt.Errorf("delete stale workflow managed marker %q in zone %q: %w", record.Name, zoneID, err)
+				}
+				desiredKeys[recordKey(record, zoneName)] = struct{}{}
 			}
 		}
 	}
@@ -605,12 +605,11 @@ func diffRecords(current, desired []Record, manageUnlisted bool, domain string) 
 		}
 	}
 	if !manageUnlisted && hasDesiredWorkflowMarker {
-		for _, record := range current {
-			if !isWorkflowManagedMarker(record, domain) {
-				continue
-			}
-			if _, ok := desiredKeys[recordKey(record, domain)]; !ok {
-				changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
+		for _, records := range currentByKey {
+			for _, record := range records {
+				if isWorkflowManagedMarker(record, domain) {
+					changes = append(changes, interfaces.FieldChange{Path: "records", Old: recordOutput(record), New: nil})
+				}
 			}
 		}
 	}

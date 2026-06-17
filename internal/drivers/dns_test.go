@@ -650,6 +650,66 @@ func TestDNSDriver_DiffDetectsStaleWorkflowManagedMarkersWhenUnlistedRecordsAreP
 	}
 }
 
+func TestDNSDriver_DiffDetectsDuplicateWorkflowManagedMarkersWithSameKey(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "gigbagg.rocks",
+		Type:       "infra.dns",
+		ProviderID: "zone",
+		Outputs: map[string]any{
+			"domain": "gigbagg.rocks",
+			"records": []map[string]any{
+				{
+					"id":   "current-marker",
+					"type": "TXT",
+					"name": "_workflow-dns-managed.gigbagg.rocks",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+				{
+					"id":   "duplicate-marker",
+					"type": "TXT",
+					"name": "_workflow-dns-managed.gigbagg.rocks",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "gigbagg.rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatalf("diff.NeedsUpdate = false, want true for duplicate workflow marker")
+	}
+	if len(diff.Changes) != 1 {
+		t.Fatalf("changes len = %d, want 1: %#v", len(diff.Changes), diff.Changes)
+	}
+	old, ok := diff.Changes[0].Old.(map[string]any)
+	if !ok {
+		t.Fatalf("change old = %#v, want record output", diff.Changes[0].Old)
+	}
+	if got, want := old["id"], "duplicate-marker"; got != want {
+		t.Fatalf("deleted marker id = %q, want %q", got, want)
+	}
+}
+
 func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
 	fake := &fakeCFClient{
 		zone: &Zone{ID: "zone", Name: "example.com"},
@@ -888,6 +948,52 @@ func TestDNSDriver_UpdateDeletesStaleWorkflowManagedMarkersWhenUnlistedRecordsAr
 	}
 	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "stale-marker" {
 		t.Fatalf("deletedRecords = %#v, want stale-marker only", fake.deletedRecords)
+	}
+}
+
+func TestDNSDriver_UpdateDeletesDuplicateWorkflowManagedMarkersWithSameKey(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "gigbagg.rocks"},
+		records: []Record{
+			{
+				ID:   "current-marker",
+				Type: "TXT",
+				Name: "_workflow-dns-managed.gigbagg.rocks",
+				Data: "heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks",
+				TTL:  300,
+			},
+			{
+				ID:   "duplicate-marker",
+				Type: "TXT",
+				Name: "_workflow-dns-managed.gigbagg.rocks",
+				Data: "heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks",
+				TTL:  300,
+			},
+			{ID: "unmanaged", Type: "TXT", Name: "gigbagg.rocks", Data: "external", TTL: 300},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "gigbagg.rocks", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "gigbagg.rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.deletedRecords) != 1 || fake.deletedRecords[0] != "duplicate-marker" {
+		t.Fatalf("deletedRecords = %#v, want duplicate-marker only", fake.deletedRecords)
 	}
 }
 
