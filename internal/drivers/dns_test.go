@@ -980,6 +980,38 @@ func TestDNSDriver_UpdatePreservesUnlistedRecordsByDefault(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_UpdateChangesMXPriorityInPlace(t *testing.T) {
+	fake := &fakeCFClient{
+		zone: &Zone{ID: "zone", Name: "example.com"},
+		records: []Record{
+			{ID: "mx-primary", Type: "MX", Name: "example.com", Data: "mail.protonmail.ch", TTL: 300, Priority: 0},
+		},
+	}
+	driver := NewDNSDriverWithClient(fake)
+	_, err := driver.Update(context.Background(), interfaces.ResourceRef{Name: "example.com", Type: "infra.dns", ProviderID: "zone"}, interfaces.ResourceSpec{
+		Name: "example.com",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain": "example.com",
+			"records": []any{
+				map[string]any{"type": "MX", "name": "@", "data": "mail.protonmail.ch", "ttl": 300, "priority": 10},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(fake.createdRecords) != 0 {
+		t.Fatalf("createdRecords = %#v, want none", fake.createdRecords)
+	}
+	if len(fake.updatedRecords) != 1 {
+		t.Fatalf("updatedRecords = %#v, want one MX priority update", fake.updatedRecords)
+	}
+	if got := fake.updatedRecords[0]; got.ID != "mx-primary" || got.Priority != 10 {
+		t.Fatalf("updated MX = %#v, want existing mx-primary priority 10", got)
+	}
+}
+
 func TestDNSDriver_UpdateNormalizesRelativeRecordNamesBeforeMatching(t *testing.T) {
 	fake := &fakeCFClient{
 		zone: &Zone{ID: "zone", Name: "example.com"},

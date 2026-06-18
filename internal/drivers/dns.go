@@ -728,11 +728,7 @@ func domainAndZoneIDFromRef(ref interfaces.ResourceRef) (string, string) {
 }
 
 func recordKey(record Record, domain string) string {
-	parts := []string{strings.ToUpper(record.Type), canonicalName(record.Name, domain), canonicalData(record.Type, record.Data, domain)}
-	if strings.EqualFold(record.Type, "MX") || strings.EqualFold(record.Type, "SRV") {
-		parts = append(parts, fmt.Sprint(record.Priority))
-	}
-	return strings.Join(parts, "\x00")
+	return strings.Join([]string{strings.ToUpper(record.Type), canonicalName(record.Name, domain), canonicalData(record.Type, record.Data, domain)}, "\x00")
 }
 
 func recordIdentity(record Record, domain string) string {
