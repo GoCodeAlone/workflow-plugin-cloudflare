@@ -833,6 +833,71 @@ func TestDNSDriver_DiffReadsCurrentRecordValueFallback(t *testing.T) {
 	}
 }
 
+func TestDNSDriver_DiffDetectsProductionStagingStateDrift(t *testing.T) {
+	driver := NewDNSDriverWithClient(&fakeCFClient{})
+	current := &interfaces.ResourceOutput{
+		Name:       "cf-gigbagg-rocks",
+		Type:       "infra.dns",
+		ProviderID: "55779bda1d3e4e1e19459902308f4b77",
+		Outputs: map[string]any{
+			"domain": "gigbagg.rocks",
+			"records": []any{
+				map[string]any{
+					"comment":   "",
+					"data":      `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"id":        "e477870c0d483aa8affc372396151447",
+					"name":      "_workflow-dns-managed.gigbagg.rocks",
+					"priority":  0,
+					"proxiable": false,
+					"proxied":   false,
+					"ttl":       300,
+					"type":      "TXT",
+				},
+				map[string]any{
+					"comment":   "",
+					"data":      `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/domain-reconcile/ resource=cf-gigbagg-rocks"`,
+					"id":        "15c764ad42ec6c38a8a737bcab848e5f",
+					"name":      "_workflow-dns-managed.gigbagg.rocks",
+					"priority":  0,
+					"proxiable": false,
+					"proxied":   false,
+					"ttl":       300,
+					"type":      "TXT",
+				},
+			},
+		},
+	}
+	diff, err := driver.Diff(context.Background(), interfaces.ResourceSpec{
+		Name: "cf-gigbagg-rocks",
+		Type: "infra.dns",
+		Config: map[string]any{
+			"domain":          "gigbagg.rocks",
+			"manage_unlisted": false,
+			"records": []any{
+				map[string]any{"type": "A", "name": "*.gigbagg.rocks", "data": "216.40.34.41", "ttl": 900},
+				map[string]any{"type": "A", "name": "gigbagg.rocks", "data": "216.40.34.41", "ttl": 900},
+				map[string]any{"type": "CNAME", "name": "mail.gigbagg.rocks", "data": "mx.hover.com.cust.hostedemail.com", "ttl": 900},
+				map[string]any{"type": "MX", "name": "gigbagg.rocks", "data": "mx.hover.com.cust.hostedemail.com", "priority": 10, "ttl": 900},
+				map[string]any{
+					"type": "TXT",
+					"name": "_workflow-dns-managed",
+					"data": `"heritage=wfinfra-v1 managed_by=wfctl state_dir=.state/cloudflare-staging/ resource=cf-gigbagg-rocks"`,
+					"ttl":  300,
+				},
+			},
+		},
+	}, current)
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !diff.NeedsUpdate {
+		t.Fatal("diff.NeedsUpdate = false, want true for missing desired records and stale marker")
+	}
+	if len(diff.Changes) != 5 {
+		t.Fatalf("changes len = %d, want 5: %#v", len(diff.Changes), diff.Changes)
+	}
+}
+
 func TestDNSDriver_DiffDetectsDuplicateWorkflowManagedMarkersWithSameKey(t *testing.T) {
 	driver := NewDNSDriverWithClient(&fakeCFClient{})
 	current := &interfaces.ResourceOutput{
